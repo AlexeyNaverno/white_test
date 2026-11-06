@@ -108,8 +108,17 @@ public final class XrayEngine {
             }
 
             root.put("outbounds", outbounds);
+            // Несколько резервных DNS: ядро пробует их по очереди.
+            JSONArray servers = new JSONArray();
+            if (dns != null) {
+                for (String part : dns.split("[,;\\s]+")) {
+                    String t = part.trim();
+                    if (!t.isEmpty()) servers.put(t);
+                }
+            }
+            if (servers.length() == 0) servers.put("1.1.1.1");
             JSONObject dnsObj = new JSONObject();
-            dnsObj.put("servers", new JSONArray().put(dns != null && !dns.isEmpty() ? dns : "1.1.1.1"));
+            dnsObj.put("servers", servers);
             root.put("dns", dnsObj);
             return root.toString();
         } catch (org.json.JSONException e) {

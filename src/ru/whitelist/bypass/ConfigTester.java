@@ -9,29 +9,85 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
-/** Параллельная проверка задержки (по умолчанию 100 потоков) + отбраковка. */
+/**
+ * Параллельная проверка «конфиг вообще отвечает» (по умолчанию 60 потоков).
+ *
+ * Проверка нарочно простая и снисходительная:
+ *   1) TLS-конфиги — TCP + TLS-handshake (отсекает заглушку провайдера на 443);
+ *   2) если handshake не прошёл — пробуем обычный TCP: сервер может быть жив,
+ *      а SNI/cert — «не тот» (Reality, чужие SNI, самоподпись);
+ *   3) живым считается тот, кто ответил хоть на одном из шагов.
+ *
+ * Отсюда и берётся кандидат на реальную проверку скорости: лучше проверить лишний
+ * конфиг, чем отбросить рабочий.
+ */
 public class ConfigTester {
 
     public interface Listener {
-        void onProgress(int done, int total);
-        void onDone(List<ProxyConfig> aliveSorted, int total, int failed);
+        /** done/total — прогресс, ok/failed — накопленный счёт. */
+        void onProgress(int done, int total, int ok, int failed);
+    }
+
+    /** Итог проверки: живые + статистика для лога. */
+    public static final class Outcome {
+        public final boolean cancelled;
+        public final List<ProxyConfig> alive;
+        public final int total;
+        public final int ok;
+        public final int failed;
+        /** Из живых — сколько прошли только TCP (TLS-handshake не удался). */
+        public final int tcpOnly;
+        public final long bestMs;
+        public final long medianMs;
+
+        Outcome(boolean cancelled, List<ProxyConfig> alive, int total, int ok, int failed,
+                int tcpOnly, long bestMs, long medianMs) {
+            this.cancelled = cancelled;
+            this.alive = alive;
+            this.total = total;
+            this.ok = ok;
+            this.failed = failed;
+            this.tcpOnly = tcpOnly;
+            this.bestMs = bestMs;
+            this.medianMs = medianMs;
+        }
+
+        /** Человеческая сводка для лога. */
+        public String summary() {
+            if (total == 0) return "нечего проверять";
+            if (ok == 0) return "живых 0 из " + total + " — ни один не ответил";
+            String s = "живых " + ok + " из " + total
+                    + " (лучший " + bestMs + " мс, медиана " + medianMs + " мс";
+            if (tcpOnly > 0) s += ", из них только TCP: " + tcpOnly;
+            return s + "), мёртвых " + failed;
+        }
     }
 
     /**
-     * Пропинговать список (изменяет config.latency) и отдать живые (latency >= 0),
-     * отсортированные по возрастанию задержки. Мёртвые остаются в списке с latency=-1.
-     * Возвращает null, если вызвана глобальная отмена (кнопка «СТОП») — тогда
-     * вызывающий код не должен применять никакие результаты (ни удаление, ни записи).
+     * Пропинговать список (проставляет config.latency) и отдать Outcome.
+     * cancelled=true — была нажата «остановить»: результаты применять не нужно.
      */
-    public static List<ProxyConfig> test(List<ProxyConfig> configs, int threads, int timeoutMs,
-                                         Listener listener) {
-        if (ConfigRepository.isCancelled()) return null;
-        ExecutorService pool = Executors.newFixedThreadPool(clamp(threads, 1, 200));
-        int total = configs.size();
-        final int[] done = {0};
+    public static Outcome test(List<ProxyConfig> configs, int threads, int timeoutMs,
+                               final Listener listener) {
+        List<ProxyConfig> list = configs == null ? new ArrayList<ProxyConfig>() : configs;
+        int total = list.size();
+        if (ConfigRepository.isCancelled()) {
+            return new Outcome(true, new ArrayList<ProxyConfig>(), total, 0, 0, 0, -1, -1);
+        }
+        if (total == 0) {
+            return new Outcome(false, new ArrayList<ProxyConfig>(), 0, 0, 0, 0, -1, -1);
+        }
+
+        int lanes = Math.max(1, Math.min(200, threads));
+        ExecutorService pool = Executors.newFixedThreadPool(lanes);
+        final AtomicInteger done = new AtomicInteger();
+        final AtomicInteger okCount = new AtomicInteger();
+        final AtomicInteger failCount = new AtomicInteger();
+        final AtomicInteger tcpOnlyCount = new AtomicInteger();
         List<Future<ProxyConfig>> futures = new ArrayList<>();
-        for (final ProxyConfig cfg : configs) {
+        for (final ProxyConfig cfg : list) {
             futures.add(pool.submit(new Callable<ProxyConfig>() {
                 @Override
                 public ProxyConfig call() {
@@ -39,19 +95,27 @@ public class ConfigTester {
                         cfg.latency = -1;
                         return cfg;
                     }
-                    if (!cfg.supported || cfg.host.isEmpty() || cfg.port <= 0) {
+                    if (!cfg.supported || cfg.host == null || cfg.host.isEmpty() || cfg.port <= 0) {
                         cfg.latency = -1;
                     } else if (cfg.hasTls()) {
-                        // TLS-конфиги: честнее TCP+handshake (иначе заглушка РКН на 443 «пингуется» в 3 мс)
                         String sni = cfg.tlsServerName();
-                        if (sni == null) sni = cfg.host;
-                        cfg.latency = NetChecker.tlsPing(cfg.host, cfg.port, sni, timeoutMs);
+                        if (sni == null || sni.isEmpty()) sni = cfg.host;
+                        long tls = NetChecker.tlsPing(cfg.host, cfg.port, sni, timeoutMs);
+                        if (tls >= 0) {
+                            cfg.latency = tls;
+                        } else {
+                            // TLS не прошёл — не приговор: Reality/чужой SNI часто так и выглядит
+                            long tcp = NetChecker.tcpPing(cfg.host, cfg.port, timeoutMs);
+                            cfg.latency = tcp;
+                            if (tcp >= 0) tcpOnlyCount.incrementAndGet();
+                        }
                     } else {
                         cfg.latency = NetChecker.tcpPing(cfg.host, cfg.port, timeoutMs);
                     }
-                    synchronized (done) {
-                        done[0]++;
-                        if (listener != null) listener.onProgress(done[0], total);
+                    int d = done.incrementAndGet();
+                    if (cfg.latency >= 0) okCount.incrementAndGet(); else failCount.incrementAndGet();
+                    if (listener != null) {
+                        listener.onProgress(d, total, okCount.get(), failCount.get());
                     }
                     return cfg;
                 }
@@ -59,15 +123,17 @@ public class ConfigTester {
         }
         pool.shutdown();
         try {
-            pool.awaitTermination(timeoutMs * (long) Math.ceil((double) total / clamp(threads, 1, 200)) + 5000,
+            pool.awaitTermination(timeoutMs * (long) Math.ceil((double) total / lanes) + 5000,
                     TimeUnit.MILLISECONDS);
         } catch (InterruptedException ignored) {
             Thread.currentThread().interrupt();
         }
         if (ConfigRepository.isCancelled()) {
             pool.shutdownNow();
-            return null;
+            return new Outcome(true, new ArrayList<ProxyConfig>(), total,
+                    okCount.get(), failCount.get(), tcpOnlyCount.get(), -1, -1);
         }
+
         List<ProxyConfig> alive = new ArrayList<>();
         int failed = 0;
         for (Future<ProxyConfig> f : futures) {
@@ -84,11 +150,10 @@ public class ConfigTester {
                 return Long.compare(a.latency, b.latency);
             }
         });
-        if (listener != null) listener.onDone(alive, total, failed);
-        return alive;
-    }
-
-    private static int clamp(int v, int min, int max) {
-        return Math.max(min, Math.min(max, v));
+        List<Long> lat = new ArrayList<>();
+        for (ProxyConfig c : alive) lat.add(c.latency);
+        long best = lat.isEmpty() ? -1 : lat.get(0);
+        long median = lat.isEmpty() ? -1 : lat.get(lat.size() / 2);
+        return new Outcome(false, alive, total, alive.size(), failed, tcpOnlyCount.get(), best, median);
     }
 }

@@ -30,7 +30,7 @@ public class SettingsActivity extends Activity {
 
     private EditText editSources, editSpeedUrls, editMinSpeed, editThreads, editTimeout,
             editGateTimeout, editStrategy, editVpnDns, editMonitor, editSwitchTimeout,
-            editTorBridges, editTorExtra;
+            editTorBridges, editTorExtra, editPingTargets, editHealthUrls, editLanes;
     private Switch swDesync, swIpv6, swAutoSwitch, swBoot, swEmbedded;
 
     private int dp(int v) {
@@ -52,8 +52,14 @@ public class SettingsActivity extends Activity {
         // --- скорость ---
         section("Скорость");
         editMinSpeed = numberField(String.valueOf(Prefs.minSpeedKbps(this)));
-        label("Минимальная скорость «рабочего» конфига, КБ/с (128 по умолчанию)");
+        label("Порог «рабочего» конфига, КБ/с: 128 = 128 КБ/с = 1024 кбит/с");
         root.addView(editMinSpeed);
+        note("Единицы: 1 КБ/с = 8 кбит/с. Значение 128 — это про КИЛОБАЙТЫ в секунду "
+                + "(≈ 1 Мбит/с), а не 128 кбит/с. Уменьшите до 64, если нужен более мягкий отбор.");
+
+        editLanes = numberField(String.valueOf(Prefs.speedLanes(this)));
+        label("Сколько ядер мерить скорость одновременно (1–4, по умолчанию 3)");
+        root.addView(editLanes);
 
         editSpeedUrls = multiField(Prefs.join(Prefs.speedUrls(this)), 3);
         label("Файлы для замера скорости (по одному на строку)");
@@ -72,10 +78,21 @@ public class SettingsActivity extends Activity {
         label("Потоков пинга одновременно");
         root.addView(editThreads);
         editTimeout = numberField(String.valueOf(Prefs.pingTimeoutMs(this)));
-        label("Таймаут пинга, мс");
+        label("Таймаут пинга, мс (2500 по умолчанию; рабочий сервер может пинговаться до 1000 мс)");
         root.addView(editTimeout);
-        note("Пинг только отсекает мёртвое. Рабочесть и скорость проверяются реальным "
-                + "запросом через поднятое ядро Xray.");
+
+        editPingTargets = multiField(Prefs.join(Prefs.pingTargets(this)), 5);
+        label("5 целей TCP-пинга «есть ли интернет» (host:port, по одной на строку)");
+        root.addView(editPingTargets);
+
+        editHealthUrls = multiField(Prefs.join(Prefs.healthUrls(this)), 5);
+        label("5 мест проверки канала через туннель (URL, по одному на строку)");
+        root.addView(editHealthUrls);
+
+        note("Пинг не решает «рабочий/не рабочий»: он только отсекает мёртвое. Конфиг, "
+                + "прошедший TLS-handshake, дополнительно проверяется обычным TCP — "
+                + "поэтому Reality и чужие SNI не отбрасываются зря. Рабочесть и скорость "
+                + "подтверждаются реальной загрузкой через поднятое ядро Xray.");
 
         // --- источники ---
         section("Источники списков (по одному на строку)");
@@ -175,7 +192,7 @@ public class SettingsActivity extends Activity {
         root.addView(save);
 
         TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.0.1\n"
+        footer.setText("Обход Белых Списков 0.0.2\n"
                 + versionLine() + "\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");
         footer.setTextColor(TEXT_DIM);
@@ -197,7 +214,10 @@ public class SettingsActivity extends Activity {
         e.putInt(Prefs.MIN_SPEED_KBPS, Prefs.clamp(parseInt(editMinSpeed, 128), 8, 20000));
         e.putInt(Prefs.GATE_TIMEOUT_MS, Prefs.clamp(parseInt(editGateTimeout, 6000), 2000, 20000));
         e.putInt(Prefs.PING_THREADS, Prefs.clamp(parseInt(editThreads, 60), 1, 200));
-        e.putInt(Prefs.PING_TIMEOUT_MS, Prefs.clamp(parseInt(editTimeout, 2000), 300, 15000));
+        e.putInt(Prefs.PING_TIMEOUT_MS, Prefs.clamp(parseInt(editTimeout, 2500), 300, 15000));
+        e.putInt(Prefs.SPEED_LANES, Prefs.clamp(parseInt(editLanes, 3), 1, 4));
+        e.putString(Prefs.PING_TARGETS, normalizeLines(editPingTargets.getText().toString()));
+        e.putString(Prefs.HEALTH_URLS, normalizeLines(editHealthUrls.getText().toString()));
         e.putString(Prefs.DPI_STRATEGY, editStrategy.getText().toString().trim());
         e.putString(Prefs.VPN_DNS, editVpnDns.getText().toString().trim());
         e.putInt(Prefs.MONITOR_INTERVAL_SEC, Prefs.clamp(parseInt(editMonitor, 15), 5, 300));

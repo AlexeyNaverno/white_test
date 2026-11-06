@@ -107,7 +107,9 @@ public class BypassVpnService extends VpnService {
             lastError = "";
             startForegroundCompat();
             sendStatus("connecting", "Запуск…");
-            Thread starter = new Thread(this::startWorker, "bypass-start");
+            Thread starter = new Thread(new Runnable() {
+                @Override public void run() { startWorker(); }
+            }, "bypass-start");
             starter.setDaemon(true);
             starter.start();
         }
@@ -197,19 +199,28 @@ public class BypassVpnService extends VpnService {
         if (all.isEmpty()) return new ArrayList<>();
         if (all.size() > QUICK_PING_CAP) all = new ArrayList<>(all.subList(0, QUICK_PING_CAP));
 
+        NetChecker.PingStats net = NetChecker.pingAll(Prefs.pingTargets(this),
+                Prefs.pingTimeoutMs(this));
+        sendStatus("connecting", "Сеть: " + net.text());
+
         sendStatus("connecting", "Пингую " + all.size() + " конфигов…");
-        List<ProxyConfig> alive = ConfigTester.test(all, Prefs.pingThreads(this),
+        ConfigTester.Outcome ping = ConfigTester.test(all, Prefs.pingThreads(this),
                 Prefs.pingTimeoutMs(this), null);
-        if (alive == null || alive.isEmpty()) return new ArrayList<>();
+        if (ping.cancelled || ping.alive.isEmpty()) {
+            sendStatus("connecting", "Пинг: " + ping.summary());
+            return new ArrayList<>();
+        }
+        sendStatus("connecting", "Пинг: " + ping.summary());
 
         List<ProxyConfig> found = new ArrayList<>();
-        int probes = Math.min(alive.size(), QUICK_PROBES);
+        int probes = Math.min(ping.alive.size(), QUICK_PROBES);
         for (int i = 0; i < probes; i++) {
             if (stopRequested.get() || ConfigRepository.isCancelled()) break;
-            ProxyConfig cfg = alive.get(i);
-            sendStatus("connecting", "Быстрый поиск " + (i + 1) + "/" + probes
-                    + ": " + truncate(cfg.name, 40));
+            ProxyConfig cfg = ping.alive.get(i);
+            sendStatus("connecting", "Проверка " + (i + 1) + "/" + probes
+                    + ": " + truncate(cfg.name, 30) + " · " + cfg.latency + " мс");
             Probe.Result r = Probe.measureConfig(this, cfg, Prefs.gateTimeoutMs(this));
+            sendStatus("connecting", "  → " + r.text());
             if (r.ok && r.kbps > 0) {
                 Pool.remember(this, cfg.raw, r.kbps, cfg.latency);
                 found.add(cfg);
@@ -408,10 +419,18 @@ public class BypassVpnService extends VpnService {
         monitorThread.start();
     }
 
+    /**
+     * Канал жив, если через туннель ответило ХОТЯ БЫ ОДНО из пяти мест.
+     * Раньше проверялся один URL — один недоступный сайт валил весь монитор.
+     */
     private boolean checkAlive() {
-        List<String> urls = Prefs.speedUrls(this);
+        List<String> urls = Prefs.healthUrls(this);
         if (urls.isEmpty()) return true;
-        return NetChecker.httpCheckThroughSocks(urls.get(0), "127.0.0.1", XRAY_PORT, 6000);
+        int ok = NetChecker.countAliveThroughSocks(urls, "127.0.0.1", XRAY_PORT, 6000);
+        if (ok == 0) {
+            Log.w(TAG, "канал не отвечает ни на одну из " + urls.size() + " целей проверки");
+        }
+        return ok > 0;
     }
 
     /** Переключение на следующий по скорости конфиг из пула. TUN и hev не перезапускаем. */

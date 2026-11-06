@@ -38,6 +38,12 @@ jobs:
           bash tools/fetch_deps.sh "$GITHUB_WORKSPACE/deps"
           ls -la deps
 
+      - name: Версия из манифеста
+        run: |
+          V=$(grep -oP 'android:versionName="\K[^"]+' AndroidManifest.xml)
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+          echo "Версия: $V"
+
       - name: Сборка APK
         run: ABIS="armeabi-v7a arm64-v8a" bash build.sh "$ANDROID_SDK" "$GITHUB_WORKSPACE/deps"
 
@@ -46,8 +52,8 @@ jobs:
           set -euo pipefail
           BT=$(ls -d "$ANDROID_SDK"/build-tools/* | sort -V | tail -1)
           export PATH="$BT:$PATH"
-          mv WhitelistBypass.apk WhitelistBypass-0.0.1.apk
-          APK=WhitelistBypass-0.0.1.apk
+          mv WhitelistBypass.apk "WhitelistBypass-$VERSION.apk"
+          APK="WhitelistBypass-$VERSION.apk"
           sha256sum "$APK" | tee apk.sha256
           {
             echo "### aapt2 badging"
@@ -63,7 +69,7 @@ jobs:
             du -h "$APK"
           } 2>&1 | tee build-report.txt
           aapt2 dump badging "$APK" | grep -q "package: name='ru.whitelist.bypass'"
-          aapt2 dump badging "$APK" | grep -q "versionName='0.0.1'"
+          aapt2 dump badging "$APK" | grep -q "versionName='$VERSION'"
           apksigner verify --print-certs "$APK" \
             | grep -qi "de18cb65d3aadc1f7b53372fe896565df2b40f51b9238e4ccef898206dc8d515" \
             || { echo "::error::подпись не совпадает с debug.keystore из репозитория"; exit 1; }
@@ -76,9 +82,9 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: WhitelistBypass-0.0.1
+          name: WhitelistBypass-${{ env.VERSION }}
           path: |
-            WhitelistBypass-0.0.1.apk
+            WhitelistBypass-${{ env.VERSION }}.apk
             apk.sha256
             build-report.txt
 
@@ -94,7 +100,7 @@ jobs:
             printf '```\n'; cat build-report.txt; printf '```\n'
           } > /tmp/body.md
           gh release create "$GITHUB_REF_NAME" \
-            WhitelistBypass-0.0.1.apk apk.sha256 build-report.txt \
+            "WhitelistBypass-$VERSION.apk" apk.sha256 build-report.txt \
             --draft \
-            --title "0.0.1 — VPN в одну кнопку: пул рабочих конфигов по скорости" \
+            --title "$VERSION — VPN в одну кнопку, пул по скорости" \
             --notes-file /tmp/body.md

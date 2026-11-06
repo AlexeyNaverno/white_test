@@ -48,14 +48,8 @@ public class MainActivity extends Activity {
     private static final int RED = 0xFFFF5252;
     private static final int ORANGE = 0xFFFFAB40;
 
-    /** Сколько конфигов «вживую» проверяем при сборе пула (дольше — не быстрее). */
-    private static final int MAX_SPEED_TESTS = 300;
-    /** Сколько параллельных проверок — телефон не тянет больше двух Xray сразу. */
-    private static final int SPEED_LANES = 2;
-    /** Сколько конфигов пингуем в быстром поиске. */
-    private static final int QUICK_PING_CAP = 300;
-    /** Сколько конфигов реально проверяем в быстром поиске. */
-    private static final int QUICK_PROBES = 20;
+    /** Сколько живых конфигов «вживую» проверяем при сборе пула (дольше — не быстрее). */
+    private static final int MAX_SPEED_TESTS = 600;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
 
@@ -412,8 +406,8 @@ public class MainActivity extends Activity {
                     @Override public void run() {
                         StringBuilder sb = new StringBuilder();
                         sb.append("Рабочих: ").append(n)
-                          .append(" · лучший: ").append(best > 0 ? best + " КБ/с" : "—")
-                          .append(" · порог: ").append(min).append(" КБ/с");
+                          .append(" · лучший: ").append(Prefs.speedText(best))
+                          .append(" · порог: ").append(Prefs.speedText(min));
                         if (n > 0) {
                             sb.append('\n').append("Собран: ").append(dateStr(at));
                             if (!active.isEmpty()) sb.append(" · активный: ").append(truncate(active, 40));
@@ -437,73 +431,21 @@ public class MainActivity extends Activity {
         searching = true;
         ConfigRepository.clearCancel();
         setBusy(true, "Поиск…");
-        uiLog("Быстрый поиск: пул → пинг → реальная проверка…");
+        uiLog("Быстрый поиск: сеть → пул → круги по спискам (до первого рабочего)");
 
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
-                    final int min = Prefs.minSpeedKbps(MainActivity.this);
-
-                    // 1) один лучший из пула — он уже замерен
-                    for (Pool.Entry e : Pool.load(MainActivity.this)) {
-                        ProxyConfig cfg = e.cfg();
-                        if (cfg == null) continue;
-                        uiLog("Проверяю лучший из пула: " + truncate(cfg.name, 45));
-                        Probe.Result r = Probe.measureConfig(MainActivity.this, cfg,
-                                Prefs.gateTimeoutMs(MainActivity.this));
-                        if (ConfigRepository.isCancelled()) { uiLog("Поиск остановлен"); return; }
-                        if (r.ok && r.kbps >= min) {
-                            adopt(cfg, r.kbps);
-                            finishOk(cfg.name, r.kbps);
-                            return;
-                        }
-                        uiLog("Лучший из пула сейчас не проходит (" + (r.kbps < 0 ? "нет данных"
-                                : r.kbps + " КБ/с") + ") — ищу по спискам");
-                        break;
-                    }
-
-                    // 2) по скачанным спискам
-                    List<ProxyConfig> all = ConfigRepository.all(MainActivity.this);
-                    if (all.isEmpty()) {
-                        uiLog("Списков нет — скачиваю источники…");
-                        ConfigRepository.UpdateResult res = ConfigRepository.updateAll(
-                                MainActivity.this, new ConfigRepository.Progress() {
-                                    @Override public void onMessage(String message) { uiLog(message); }
-                                });
-                        uiLog("Источники: " + res);
-                        all = ConfigRepository.all(MainActivity.this);
-                    }
-                    if (all.isEmpty()) {
-                        uiLog("Проверять нечего: запустите «Собрать пул»");
+                    QuickSearch.Found found = QuickSearch.find(MainActivity.this,
+                            new QuickSearch.Log() {
+                                @Override public void line(String message) { uiLog(message); }
+                            });
+                    if (found == null) {
+                        uiLog("Рабочий конфиг не найден — попробуйте «Собрать пул» или добавьте источники");
                         return;
                     }
-                    if (all.size() > QUICK_PING_CAP) all = new ArrayList<>(all.subList(0, QUICK_PING_CAP));
-
-                    uiLog("Пингую " + all.size() + " конфигов…");
-                    List<ProxyConfig> alive = ConfigTester.test(all, Prefs.pingThreads(MainActivity.this),
-                            Prefs.pingTimeoutMs(MainActivity.this), new ConfigTester.Listener() {
-                                @Override public void onProgress(int done, int total) {
-                                    if (done % 100 == 0) uiLog("пинг " + done + "/" + total);
-                                }
-                                @Override public void onDone(List<ProxyConfig> a, int t, int f) { }
-                            });
-                    if (alive == null) { uiLog("Поиск остановлен"); return; }
-                    if (alive.isEmpty()) { uiLog("Ни один конфиг не пингуется — сеть недоступна?"); return; }
-
-                    int probes = Math.min(alive.size(), QUICK_PROBES);
-                    for (int i = 0; i < probes; i++) {
-                        if (ConfigRepository.isCancelled()) { uiLog("Поиск остановлен"); return; }
-                        ProxyConfig cfg = alive.get(i);
-                        uiLog("Проверка " + (i + 1) + "/" + probes + ": " + truncate(cfg.name, 45));
-                        Probe.Result r = Probe.measureConfig(MainActivity.this, cfg,
-                                Prefs.gateTimeoutMs(MainActivity.this));
-                        if (r.ok && r.kbps >= min) {
-                            adopt(cfg, r.kbps);
-                            finishOk(cfg.name, r.kbps);
-                            return;
-                        }
-                    }
-                    uiLog("Готовых конфигов быстрее " + min + " КБ/с не нашлось — попробуйте «Собрать пул»");
+                    adopt(found.cfg, found.kbps);
+                    finishOk(found.cfg.name, found.kbps);
                 } catch (Throwable t) {
                     Log.e("MainActivity", "quick search failed", t);
                     uiLog("Ошибка поиска: " + t.getMessage());
@@ -561,35 +503,63 @@ public class MainActivity extends Activity {
                         return;
                     }
 
-                    // 2) пинг
-                    uiLog("Пингую " + all.size() + " конфигов…");
-                    List<ProxyConfig> alive = ConfigTester.test(all,
+                    // 1.5) сеть: 5 целей параллельно
+                    NetChecker.PingStats net = NetChecker.pingAll(
+                            Prefs.pingTargets(MainActivity.this),
+                            Prefs.pingTimeoutMs(MainActivity.this));
+                    uiLog("Сеть: " + net.text());
+
+                    // 2) пинг: партиями, с накопленной статистикой
+                    uiLog("Пингую " + all.size() + " конфигов (потоков "
+                            + Prefs.pingThreads(MainActivity.this) + ", таймаут "
+                            + Prefs.pingTimeoutMs(MainActivity.this) + " мс)…");
+                    final int pingStep = 50;
+                    ConfigTester.Outcome ping = ConfigTester.test(all,
                             Prefs.pingThreads(MainActivity.this),
                             Prefs.pingTimeoutMs(MainActivity.this),
                             new ConfigTester.Listener() {
-                                @Override public void onProgress(int done, int total) {
-                                    if (done % 100 == 0) uiLog("пинг " + done + "/" + total);
+                                @Override public void onProgress(int done, int total, int ok, int failed) {
+                                    if (done % pingStep == 0 || done == total) {
+                                        uiLog("  пинг " + done + "/" + total
+                                                + " → живых " + ok + ", мёртвых " + failed);
+                                    }
                                 }
-                                @Override public void onDone(List<ProxyConfig> a, int t, int f) { }
                             });
-                    if (alive == null) { uiLog("Сбор остановлен"); return; }
-                    if (alive.isEmpty()) { uiLog("Ни один конфиг не пингуется — сеть недоступна?"); return; }
+                    if (ping.cancelled) { uiLog("Сбор остановлен"); return; }
+                    uiLog("Пинг: " + ping.summary());
+                    if (ping.alive.isEmpty()) {
+                        uiLog("Ни один конфиг не пингуется — сеть недоступна или источники пустые");
+                        return;
+                    }
+                    StringBuilder aliveLine = new StringBuilder("Пингуются: ");
+                    for (int i = 0; i < Math.min(10, ping.alive.size()); i++) {
+                        ProxyConfig a = ping.alive.get(i);
+                        if (i > 0) aliveLine.append(" · ");
+                        aliveLine.append(truncate(a.name, 20)).append(' ').append(a.latency).append(" мс");
+                    }
+                    if (ping.alive.size() > 10) aliveLine.append(" · ещё ").append(ping.alive.size() - 10);
+                    uiLog(aliveLine.toString());
 
-                    List<ProxyConfig> testList = alive;
+                    List<ProxyConfig> testList = ping.alive;
                     if (testList.size() > MAX_SPEED_TESTS) {
+                        uiLog("Живых больше " + MAX_SPEED_TESTS + " — меряю первые "
+                                + MAX_SPEED_TESTS + " по пингу");
                         testList = new ArrayList<>(testList.subList(0, MAX_SPEED_TESTS));
                     }
                     final List<ProxyConfig> work = testList;
                     final int min = Prefs.minSpeedKbps(MainActivity.this);
                     final int total = work.size();
-                    uiLog("Меряю скорость у " + total + " живых (порог " + min + " КБ/с)…");
+                    final int lanes = Prefs.speedLanes(MainActivity.this);
+                    uiLog("Меряю скорость у " + total + " живых параллельно: " + lanes
+                            + " ядра, порог " + Prefs.speedText(min));
 
-                    // 3) скорость: две «дорожки», каждая — свой экземпляр Xray
-                    final List<Pool.Entry> found = java.util.Collections.synchronizedList(new ArrayList<Pool.Entry>());
+                    // 3) скорость: несколько «дорожек», каждая — свой экземпляр Xray
+                    final List<Pool.Entry> found =
+                            java.util.Collections.synchronizedList(new ArrayList<Pool.Entry>());
                     final AtomicInteger cursor = new AtomicInteger();
                     final AtomicInteger done = new AtomicInteger();
-                    ExecutorService lane = Executors.newFixedThreadPool(SPEED_LANES);
-                    for (int i = 0; i < SPEED_LANES; i++) {
+                    ExecutorService lane = Executors.newFixedThreadPool(lanes);
+                    for (int i = 0; i < lanes; i++) {
                         lane.execute(new Runnable() {
                             @Override public void run() {
                                 for (;;) {
@@ -599,14 +569,18 @@ public class MainActivity extends Activity {
                                     ProxyConfig cfg = work.get(idx);
                                     Probe.Result r = Probe.measureConfig(MainActivity.this, cfg,
                                             Prefs.gateTimeoutMs(MainActivity.this));
-                                    if (r.ok && r.kbps >= min) {
+                                    boolean passed = r.ok && r.kbps >= min;
+                                    if (passed) {
                                         found.add(new Pool.Entry(cfg.raw, r.kbps,
                                                 cfg.latency, System.currentTimeMillis()));
                                     }
                                     int d = done.incrementAndGet();
-                                    if (d % 5 == 0 || d == total) {
+                                    if (d % 5 == 0 || d == total || passed) {
                                         uiLog("скорость " + d + "/" + total
-                                                + " · рабочих " + found.size());
+                                                + " · рабочих " + found.size()
+                                                + (passed ? " · +" + Prefs.speedText(r.kbps)
+                                                           : " · " + truncate(cfg.name, 24)
+                                                             + ": " + r.reason));
                                     }
                                 }
                             }
@@ -622,10 +596,13 @@ public class MainActivity extends Activity {
                     Pool.save(MainActivity.this, snapshot);
                     final int n = snapshot.size();
                     final long best = n > 0 ? Pool.bestKbps(MainActivity.this) : -1;
-                    uiLog("Пул собран: " + n + " рабочих" + (best > 0 ? ", лучший " + best + " КБ/с" : ""));
+                    uiLog("Пул собран: " + n + " рабочих из " + ping.alive.size() + " живых"
+                            + (best > 0 ? ", лучший " + Prefs.speedText(best) : "")
+                            + ". Порог: " + Prefs.speedText(min));
                     runOnUiThread(new Runnable() {
                         @Override public void run() {
-                            toast("Пул: " + n + " рабочих" + (best > 0 ? ", лучший " + best + " КБ/с" : ""));
+                            toast("Пул: " + n + " рабочих"
+                                    + (best > 0 ? ", лучший " + Prefs.speedText(best) : ""));
                         }
                     });
                 } catch (Throwable t) {

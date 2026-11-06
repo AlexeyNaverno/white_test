@@ -354,7 +354,7 @@ public final class ConfigRepository {
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(25000);
             conn.setInstanceFollowRedirects(true);
-            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.0.1");
+            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.0.2");
             conn.setRequestProperty("Accept", "text/plain, */*");
             int code = conn.getResponseCode();
             if (code < 200 || code >= 400) throw new IOException("HTTP " + code);
@@ -376,6 +376,45 @@ public final class ConfigRepository {
         } finally {
             conn.disconnect();
         }
+    }
+
+    // ------------------------------------------------------------------ ленивая подгрузка
+
+    /**
+     * Скачать ОДИН источник (для ленивой подгрузки в быстром поиске: тянем по файлу,
+     * а не все сразу). viaTor — через локальный Tor SOCKS (его поднимает вызывающий).
+     */
+    public static List<String> fetchSource(String urlStr, boolean viaTor) throws IOException {
+        return fetch(urlStr, viaTor ? torProxy() : null);
+    }
+
+    /** Поднять Tor (только как канал скачивания). true — SOCKS готов. */
+    public static boolean startTor(Context c) {
+        return TorEngine.ensureStarted(c, 150_000);
+    }
+
+    public static void stopTor(Context c) {
+        TorEngine.stop(c);
+    }
+
+    /**
+     * Добавить новые строки в хранилище, не теряя уже сохранённые.
+     * Возвращает, сколько НОВЫХ конфигов добавилось (дубли по каноническому ключу не в счёт).
+     */
+    public static synchronized int appendNew(Context c, List<String> lines) {
+        if (lines == null || lines.isEmpty()) return 0;
+        Map<String, String> unique = new LinkedHashMap<>();
+        for (String line : readLines(configsFile(c))) {
+            unique.put(canonicalKey(line), line);
+        }
+        int before = unique.size();
+        UpdateResult counter = new UpdateResult();
+        collect(unique, lines, counter);
+        int added = unique.size() - before;
+        if (added > 0) {
+            writeAll(c, new ArrayList<>(unique.values()));
+        }
+        return added;
     }
 
     public static String shortSource(String url) {
