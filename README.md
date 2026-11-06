@@ -56,13 +56,52 @@ APK подписан debug-ключом, который лежит в репоз
 
 | Репозиторий | Файлы |
 |---|---|
+| [luxxuria/harvester](https://github.com/luxxuria/harvester) | `speed_tested.txt` (топ по скорости), `ping_tested.txt` |
+| [kort0881/vpn-vless-configs-russia](https://github.com/kort0881/vpn-vless-configs-russia) | `data/githubmirror/ru-sni-local/vless.txt`, `data/githubmirror/clean/vless.txt` |
 | [igareck/vpn-configs-for-russia](https://github.com/igareck/vpn-configs-for-russia) | `BLACK_VLESS_RUS_mobile.txt`, `Vless-Reality-White-Lists-Rus-Mobile.txt`, `WHITE-CIDR-RU-all.txt`, `BLACK_VLESS_RUS.txt` |
 | [wlunlocker/vpn-configs](https://github.com/wlunlocker/vpn-configs) | `whitelist_all.txt` |
 | [ByeWhiteLists/ByeWhiteLists2](https://github.com/ByeWhiteLists/ByeWhiteLists2) | `ByeWhiteLists2.txt` |
+| [tiagorrg/vless-checker](https://github.com/tiagorrg/vless-checker) | `docs/keys.json` (результаты автопроверки ключей по странам) |
+| [26info/vless-proxy-list](https://github.com/26info/vless-proxy-list) | `working-proxies.txt` |
+
+Порядок не случайный: сначала идут небольшие списки, которые их авторы уже проверили на
+пинг и скорость, потом массовые сборники, а самый большой файл — последним (до него дело
+обычно не доходит: число хранимых конфигов ограничено). Из JSON-списков ссылки
+вытаскиваются как есть, поэтому файл не обязан быть «одна строка — один конфиг».
 
 Если основной адрес недоступен, тот же файл запрашивается через зеркало jsDelivr; если
 недоступны все — списки скачиваются через Tor. Список источников редактируется в
 настройках (по одному URL на строку), туда можно добавить свои.
+
+## Стратегии DPI-обхода
+
+DPI-обход линии строится на аргументах [ciadpi](https://github.com/hufrea/byedpi)
+(ByeDPI): фрагментация TLS, disorder, фейковые пакеты и т.п. Рабочая стратегия зависит от
+провайдера и от того, что именно блокируют, — одна «на все случаи» живёт недолго. Поэтому
+список стратегий обновляется из открытых репозиториев, где авторы сами гоняют их по
+блокировкам:
+
+| Репозиторий | Файл |
+|---|---|
+| [romanvht/ByeByeDPI](https://github.com/romanvht/ByeByeDPI) | `app/src/main/assets/proxytest_strategies.list` |
+| [alimali54/DPIscord](https://github.com/alimali54/DPIscord) | `linux/byedpi/strategies.txt` |
+
+Как это работает:
+
+1. **Автообновление.** Нажатие «Обновить стратегии с GitHub» в настройках (а также каждый
+   «Собрать пул») скачивает эти файлы, отбрасывает комментарии и мусор, складывает
+   стратегии в `files/strategies.txt`; встроенный минимум остаётся всегда.
+2. **Проверка.** Кнопка «Проверить стратегии сейчас» и автоподбор при подключении по
+   очереди поднимают ciadpi с очередной стратегией и идут через неё на заблокированные
+   адреса (Discord, YouTube, Instagram — список задаётся в настройках). Стратегия считается
+   рабочей, если отдал хотя бы один из адресов.
+3. **Сохранение.** Первая прошедшая стратегия записывается в настройки и применяется к
+   линии до VPN-сервера при следующих подключениях. Автоподбор можно выключить — тогда
+   используется ровно та стратегия, что стоит в поле настроек.
+
+Поддерживаются оба формата аргументов: короткий (`-d1 -s3+sm -a1`) и длинный
+(`--disorder 1 --auto=torst`); `{sni}` и `{port}` подставляются автоматически. Стратегии
+для `zapret`/`nfqws` (формат `PROTO|ARGS`) не подходят и не используются.
 
 ## Как устроен репозиторий
 

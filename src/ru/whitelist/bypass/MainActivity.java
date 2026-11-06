@@ -556,6 +556,15 @@ public class MainActivity extends Activity {
                         return;
                     }
 
+                    // 1.2) стратегии DPI: тот же сбор пула — удобный момент их обновить
+                    if (!ConfigRepository.isCancelled()) {
+                        uiLog("Обновляю стратегии DPI-обхода с GitHub…");
+                        int n = DpiStrategies.refresh(MainActivity.this, new DpiStrategies.Log() {
+                            @Override public void line(String message) { uiLog(message); }
+                        });
+                        uiLog("DPI-стратегии: доступно " + n);
+                    }
+
                     // 1.5) сеть: 5 целей параллельно
                     NetChecker.PingStats net = NetChecker.pingAll(
                             Prefs.pingTargets(MainActivity.this),

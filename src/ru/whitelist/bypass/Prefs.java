@@ -31,6 +31,12 @@ public final class Prefs {
     public static final String GATE_TIMEOUT_MS = "gate_timeout_ms";
     public static final String DESYNC_LINE = "desync_line";
     public static final String DPI_STRATEGY = "dpi_strategy_v3";
+    /** Откуда брать список стратегий ciadpi (по одной на строку). */
+    public static final String DPI_SOURCES = "dpi_sources";
+    /** Подбирать рабочую стратегию автоматически (пробовать список до первой успешной). */
+    public static final String DPI_AUTOTUNE = "dpi_autotune";
+    /** Ссылки, по которым проверяется эффективность стратегии DPI. */
+    public static final String DPI_TEST_URLS = "dpi_test_urls";
     public static final String VPN_DNS = "vpn_dns";
     public static final String IPV6 = "ipv6";
     public static final String AUTO_SWITCH = "auto_switch";
@@ -49,14 +55,47 @@ public final class Prefs {
     /** Одна рабочая стратегия DPI — та, что подставляется в линию до VPN-сервера. */
     public static final String DEFAULT_STRATEGY = "--disorder 1 --auto=torst --tlsrec 1+s";
 
-    /** Источники списков VLESS (по одному на строку). */
+    /**
+     * Списки проверенных аргументов ciadpi (ByeDPI). Берём из открытых репозиториев,
+     * где авторы сами гоняют стратегии по блокировкам; поддерживаются оба формата —
+     * короткий (`-d1 -s3+sm`) и длинный (`--disorder 1`).
+     */
+    public static final String[] DEFAULT_DPI_SOURCES = {
+            "https://raw.githubusercontent.com/romanvht/ByeByeDPI/master/app/src/main/assets/proxytest_strategies.list",
+            "https://raw.githubusercontent.com/alimali54/DPIscord/main/linux/byedpi/strategies.txt"
+    };
+
+    /** Через эти адреса проверяется, пробивает ли стратегия DPI блокировку. */
+    public static final String[] DEFAULT_DPI_TEST_URLS = {
+            "https://discord.com/",
+            "https://www.youtube.com/generate_204",
+            "https://www.instagram.com/"
+    };
+
+    /**
+     * Источники списков (по одному на строку). Порядок важен: сначала идут небольшие
+     * списки, которые уже проверены на пинг/скорость их авторами, потом массовые сборники,
+     * и только в конце — самый большой файл (на телефоне до него обычно не доходит:
+     * хранилище ограничено MAX_LINES).
+     */
     public static final String[] DEFAULT_SOURCES = {
+            // авторы уже проверили пинг/скорость — самые «плотные» списки
+            "https://raw.githubusercontent.com/luxxuria/harvester/main/speed_tested.txt",
+            "https://raw.githubusercontent.com/luxxuria/harvester/main/ping_tested.txt",
+            "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni-local/vless.txt",
+            // массовые сборники под РФ
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS_mobile.txt",
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-all.txt",
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS.txt",
             "https://raw.githubusercontent.com/wlunlocker/vpn-configs/main/whitelist_all.txt",
-            "https://raw.githubusercontent.com/ByeWhiteLists/ByeWhiteLists2/refs/heads/main/ByeWhiteLists2.txt"
+            "https://raw.githubusercontent.com/ByeWhiteLists/ByeWhiteLists2/refs/heads/main/ByeWhiteLists2.txt",
+            // JSON с результатами автопроверки ключей: ссылки вытаскиваются из него как есть
+            "https://raw.githubusercontent.com/tiagorrg/vless-checker/main/docs/keys.json",
+            // небольшой список «рабочих» прокси
+            "https://raw.githubusercontent.com/26info/vless-proxy-list/main/working-proxies.txt",
+            // общий большой сборник — последним
+            "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/vless.txt"
     };
 
     /**
@@ -193,6 +232,27 @@ public final class Prefs {
     public static String dpiStrategy(Context c) {
         String s = get(c).getString(DPI_STRATEGY, DEFAULT_STRATEGY);
         return s == null || s.trim().isEmpty() ? DEFAULT_STRATEGY : s.trim();
+    }
+
+    public static List<String> dpiSources(Context c) {
+        List<String> out = lines(get(c).getString(DPI_SOURCES, join(DEFAULT_DPI_SOURCES)));
+        if (out.isEmpty()) {
+            for (String u : DEFAULT_DPI_SOURCES) out.add(u);
+        }
+        return out;
+    }
+
+    public static boolean dpiAutotune(Context c) {
+        return get(c).getBoolean(DPI_AUTOTUNE, true);
+    }
+
+    /** Адреса, по которым проверяется, пробивает ли стратегия DPI блокировку. */
+    public static List<String> dpiTestUrls(Context c) {
+        List<String> out = lines(get(c).getString(DPI_TEST_URLS, join(DEFAULT_DPI_TEST_URLS)));
+        if (out.isEmpty()) {
+            for (String u : DEFAULT_DPI_TEST_URLS) out.add(u);
+        }
+        return out;
     }
 
     public static void setDpiStrategy(Context c, String s) {

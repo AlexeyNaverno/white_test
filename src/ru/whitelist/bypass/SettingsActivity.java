@@ -30,8 +30,9 @@ public class SettingsActivity extends Activity {
 
     private EditText editSources, editSpeedUrls, editMinSpeed, editThreads, editTimeout,
             editGateTimeout, editStrategy, editVpnDns, editMonitor, editSwitchTimeout,
-            editTorBridges, editTorExtra, editPingTargets, editHealthUrls, editLanes;
-    private Switch swDesync, swIpv6, swAutoSwitch, swBoot, swEmbedded;
+            editTorBridges, editTorExtra, editPingTargets, editHealthUrls, editLanes,
+            editDpiSources;
+    private Switch swDesync, swIpv6, swAutoSwitch, swBoot, swEmbedded, swDpiAutotune;
 
     private int dp(int v) {
         return (int) (v * getResources().getDisplayMetrics().density);
@@ -125,6 +126,88 @@ public class SettingsActivity extends Activity {
                 + "не прошло (первые 3 конфига). TLS к серверу при этом фрагментируется, "
                 + "поэтому для Reality этот путь может не сработать.");
 
+        swDpiAutotune = switchRow("Подбирать стратегию автоматически под текущего провайдера",
+                Prefs.dpiAutotune(this));
+        note("При подключении приложение по очереди поднимает ciadpi с разными стратегиями "
+                + "и проверяет, открываются ли заблокированные адреса. Первая подошедшая "
+                + "сохраняется и используется дальше. Это занимает до ~30 секунд один раз "
+                + "за подключение.");
+
+        editDpiSources = multiField(Prefs.join(Prefs.dpiSources(this)), 3);
+        label("Откуда брать стратегии (по одной ссылке на строку)");
+        root.addView(editDpiSources);
+
+        Button refreshDpi = smallButton("Обновить стратегии с GitHub");
+        refreshDpi.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                savePrefs();
+                toast("Скачиваю списки стратегий…");
+                final TextView out = new TextView(SettingsActivity.this);
+                out.setTextColor(TEXT_DIM);
+                out.setTextSize(12);
+                root.addView(out);
+                Thread t = new Thread(new Runnable() {
+                    @Override public void run() {
+                        ConfigRepository.clearCancel();
+                        final StringBuilder sb = new StringBuilder();
+                        final int n = DpiStrategies.refresh(SettingsActivity.this, new DpiStrategies.Log() {
+                            @Override public void line(String message) {
+                                sb.append(message).append('\n');
+                                runOnUiThread(new Runnable() {
+                                    @Override public void run() { out.setText(sb.toString()); }
+                                });
+                            }
+                        });
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                out.append("\nВсего стратегий: " + n);
+                                toast("Стратегий сохранено: " + n);
+                            }
+                        });
+                    }
+                }, "dpi-refresh");
+                t.setDaemon(true);
+                t.start();
+            }
+        });
+        root.addView(refreshDpi);
+
+        Button dpiProbe = smallButton("Проверить стратегии сейчас");
+        dpiProbe.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                savePrefs();
+                final TextView out = new TextView(SettingsActivity.this);
+                out.setTextColor(TEXT_DIM);
+                out.setTextSize(12);
+                root.addView(out);
+                toast("Проверяю стратегии…");
+                Thread t = new Thread(new Runnable() {
+                    @Override public void run() {
+                        ConfigRepository.clearCancel();
+                        final StringBuilder sb = new StringBuilder();
+                        String chosen = DpiStrategies.autotune(SettingsActivity.this, null,
+                                new DpiStrategies.Log() {
+                                    @Override public void line(String message) {
+                                        sb.append(message).append('\n');
+                                        runOnUiThread(new Runnable() {
+                                            @Override public void run() { out.setText(sb.toString()); }
+                                        });
+                                    }
+                                });
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                editStrategy.setText(chosen);
+                                toast("Рабочая стратегия сохранена в поле выше");
+                            }
+                        });
+                    }
+                }, "dpi-probe-all");
+                t.setDaemon(true);
+                t.start();
+            }
+        });
+        root.addView(dpiProbe);
+
         // --- сеть ---
         section("Сеть");
         editVpnDns = singleField(Prefs.vpnDns(this));
@@ -192,7 +275,7 @@ public class SettingsActivity extends Activity {
         root.addView(save);
 
         TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.0.5\n"
+        footer.setText("Обход Белых Списков 0.0.6\n"
                 + versionLine() + "\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");
         footer.setTextColor(TEXT_DIM);
@@ -219,6 +302,8 @@ public class SettingsActivity extends Activity {
         e.putString(Prefs.PING_TARGETS, normalizeLines(editPingTargets.getText().toString()));
         e.putString(Prefs.HEALTH_URLS, normalizeLines(editHealthUrls.getText().toString()));
         e.putString(Prefs.DPI_STRATEGY, editStrategy.getText().toString().trim());
+        e.putString(Prefs.DPI_SOURCES, normalizeLines(editDpiSources.getText().toString()));
+        e.putBoolean(Prefs.DPI_AUTOTUNE, swDpiAutotune.isChecked());
         e.putString(Prefs.VPN_DNS, editVpnDns.getText().toString().trim());
         e.putInt(Prefs.MONITOR_INTERVAL_SEC, Prefs.clamp(parseInt(editMonitor, 15), 5, 300));
         e.putInt(Prefs.SWITCH_TIMEOUT_SEC, Prefs.clamp(parseInt(editSwitchTimeout, 45), 5, 3600));

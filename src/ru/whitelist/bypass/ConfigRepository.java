@@ -44,7 +44,7 @@ public final class ConfigRepository {
     /** Потолок времени на один источник (медленный файл не должен блокировать остальные). */
     private static final int SOURCE_BUDGET_MS = 20000;
     /** Потолок времени на обновление всех источников: дальше работаем с тем, что есть. */
-    private static final int TOTAL_BUDGET_MS = 90000;
+    private static final int TOTAL_BUDGET_MS = 120000;
     /** Потолок хранилища: больше 2 000 строк телефону не нужно. */
     private static final int MAX_LINES = 2000;
 
@@ -320,22 +320,39 @@ public final class ConfigRepository {
         return res;
     }
 
+    /** Ссылка на конфиг внутри строки: подходит и для JSON, и для markdown/HTML. */
+    private static final java.util.regex.Pattern TOKEN = java.util.regex.Pattern.compile(
+            "(?:vless|vmess|trojan|ss|ssr|hysteria2|hy2|tuic)://[^\\s\"'<>\\,)]+",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
     private static int collect(Map<String, String> unique, List<String> lines, UpdateResult res) {
         int added = 0;
         for (String line : lines) {
             String t = line.trim();
             if (t.isEmpty() || t.startsWith("#") || t.startsWith("//")) continue;
-            ProxyConfig p = ProxyConfig.parse(t, "источник", false);
-            if (p == null || p.host == null || p.host.isEmpty() || p.port <= 0) continue;
-            if (!p.supported) { res.skipped++; continue; }
-            String key = canonicalKey(t);
-            if (unique.containsKey(key)) continue;
-            unique.put(key, t);
-            res.parsed++;
-            added++;
+            added += addOne(unique, t, res);
+            if (unique.size() >= MAX_LINES) break;
+            // строка может быть не конфигом, а JSON/разметкой: вытаскиваем ссылки из неё
+            java.util.regex.Matcher m = TOKEN.matcher(t);
+            while (m.find()) {
+                added += addOne(unique, m.group(), res);
+                if (unique.size() >= MAX_LINES) break;
+            }
             if (unique.size() >= MAX_LINES) break;
         }
         return added;
+    }
+
+    private static int addOne(Map<String, String> unique, String raw, UpdateResult res) {
+        if (unique.size() >= MAX_LINES) return 0;
+        ProxyConfig p = ProxyConfig.parse(raw, "источник", false);
+        if (p == null || p.host == null || p.host.isEmpty() || p.port <= 0) return 0;
+        if (!p.supported) { res.skipped++; return 0; }
+        String key = canonicalKey(raw);
+        if (unique.containsKey(key)) return 0;
+        unique.put(key, raw);
+        res.parsed++;
+        return 1;
     }
 
     private static void writeAll(Context c, List<String> lines) {
