@@ -241,6 +241,48 @@ public class SettingsActivity extends Activity {
         label("Дополнительные строки torrc");
         root.addView(editTorExtra);
 
+        note("Проверка мостов идёт по одному мосту: поднимаем Tor, качаем тестовую страницу, "
+                + "запоминаем скорость. Дальше и в приложении, и в браузере мосты "
+                + "используются начиная с самого быстрого. Долго: до нескольких минут.");
+
+        final TextView torOut = new TextView(this);
+        torOut.setTextColor(TEXT_DIM);
+        torOut.setTextSize(12);
+        String savedReport = Prefs.torReport(this);
+        torOut.setText(savedReport.isEmpty() ? "Проверка ещё не запускалась." : savedReport);
+        root.addView(torOut);
+
+        Button checkTor = smallButton("Проверить мосты и источники через Tor");
+        checkTor.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                savePrefs();
+                ConfigRepository.clearCancel();
+                toast("Проверяю мосты — это может занять несколько минут");
+                Thread t = new Thread(new Runnable() {
+                    @Override public void run() {
+                        final StringBuilder sb = new StringBuilder();
+                        final String report = TorCheck.run(SettingsActivity.this, new TorCheck.Log() {
+                            @Override public void line(String message) {
+                                sb.append(message).append('\n');
+                                runOnUiThread(new Runnable() {
+                                    @Override public void run() { torOut.setText(sb.toString()); }
+                                });
+                            }
+                        });
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                torOut.setText(report);
+                                toast("Проверка мостов завершена");
+                            }
+                        });
+                    }
+                }, "tor-check");
+                t.setDaemon(true);
+                t.start();
+            }
+        });
+        root.addView(checkTor);
+
         // --- данные ---
         section("Данные");
         swEmbedded = switchRow("Встроенный резерв конфигов", Prefs.embeddedEnabled(this));
@@ -274,8 +316,19 @@ public class SettingsActivity extends Activity {
         });
         root.addView(save);
 
+        Button browser = smallButton("Браузер (одна вкладка, поиск DuckDuckGo)");
+        browser.setTextColor(0xFFB388FF);
+        browser.setTextSize(15);
+        browser.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                savePrefs();
+                startActivity(new android.content.Intent(SettingsActivity.this, BrowserActivity.class));
+            }
+        });
+        root.addView(browser);
+
         TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.0.6\n"
+        footer.setText("Обход Белых Списков 0.0.7\n"
                 + versionLine() + "\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");
         footer.setTextColor(TEXT_DIM);

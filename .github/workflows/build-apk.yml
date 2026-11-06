@@ -4,9 +4,11 @@ on:
   workflow_dispatch:
   push:
     tags: ['v*']
+    branches: ['arena/**']   # ВРЕМЕННО: отладка сборки
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   build:
@@ -45,7 +47,20 @@ jobs:
           echo "Версия: $V"
 
       - name: Сборка APK
-        run: ABIS="armeabi-v7a arm64-v8a" bash build.sh "$ANDROID_SDK" "$GITHUB_WORKSPACE/deps"
+        run: |
+          set -o pipefail
+          ABIS="armeabi-v7a arm64-v8a" bash build.sh "$ANDROID_SDK" "$GITHUB_WORKSPACE/deps" 2>&1 | tee /tmp/build.log
+
+      - name: Отладка (лог сборки в отдельную ветку)
+        if: failure()
+        run: |
+          tail -c 20000 /tmp/build.log > /tmp/tail.txt || true
+          git config user.name "ci"; git config user.email "ci@localhost"
+          mkdir -p ci-log && cp /tmp/tail.txt ci-log/build.log
+          git checkout -b "ci-log-${{ github.run_id }}"
+          git add ci-log/build.log
+          git commit -m "ci log ${{ github.run_id }}"
+          git push origin "HEAD:ci-log-${{ github.run_id }}"
 
       - name: Проверка артефакта (жёсткие ассерты)
         run: |

@@ -37,14 +37,21 @@ public final class ConfigRepository {
 
     private static final String FILE = "configs.txt";
     private static final int MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024;
-    /** Сколько ждём соединения с источником. */
-    private static final int CONNECT_TIMEOUT_MS = 8000;
-    /** Сколько ждём очередную порцию данных: дольше — считаем, что источник «завис». */
-    private static final int READ_TIMEOUT_MS = 10000;
-    /** Потолок времени на один источник (медленный файл не должен блокировать остальные). */
-    private static final int SOURCE_BUDGET_MS = 20000;
-    /** Потолок времени на обновление всех источников: дальше работаем с тем, что есть. */
-    private static final int TOTAL_BUDGET_MS = 120000;
+    /**
+     * Лимиты прямого канала. В этих списках — килобайты, а не мегабайты, поэтому
+     * двух секунд на источник хватает с запасом; всё, что медленнее, просто не наш случай.
+     * Лимит считается на каждый источник отдельно — общего «на всё про всё» нет.
+     */
+    private static final int CONNECT_TIMEOUT_MS = 2000;
+    private static final int READ_TIMEOUT_MS = 2000;
+    private static final int SOURCE_BUDGET_MS = 2000;
+    /**
+     * Лимиты для Tor: он медленный по определению, но это резервный канал, и здесь
+     * времени даём заметно больше — иначе резерв никогда не сработает.
+     */
+    private static final int TOR_CONNECT_TIMEOUT_MS = 20000;
+    private static final int TOR_READ_TIMEOUT_MS = 25000;
+    private static final int TOR_SOURCE_BUDGET_MS = 40000;
     /** Потолок хранилища: больше 2 000 строк телефону не нужно. */
     private static final int MAX_LINES = 2000;
 
@@ -247,12 +254,6 @@ public final class ConfigRepository {
         long started = System.currentTimeMillis();
         for (String src : sources) {
             if (isCancelled()) break;
-            if (System.currentTimeMillis() - started > TOTAL_BUDGET_MS) {
-                res.messages.add("Лимит загрузки " + (TOTAL_BUDGET_MS / 1000)
-                        + " с исчерпан — остальные источники пропускаю");
-                res.timedOut = true;
-                break;
-            }
             res.sourcesTried++;
             if (progress != null) progress.onMessage("Скачиваю: " + shortSource(src));
             long[] bytes = new long[1];
@@ -432,18 +433,22 @@ public final class ConfigRepository {
         HttpURLConnection conn = (HttpURLConnection) (proxy != null
                 ? new URL(urlStr).openConnection(proxy)
                 : new URL(urlStr).openConnection());
+        boolean viaTor = proxy != null;
+        int connectTimeout = viaTor ? TOR_CONNECT_TIMEOUT_MS : CONNECT_TIMEOUT_MS;
+        int readTimeout = viaTor ? TOR_READ_TIMEOUT_MS : READ_TIMEOUT_MS;
+        long budget = viaTor ? TOR_SOURCE_BUDGET_MS : SOURCE_BUDGET_MS;
         try {
-            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            conn.setReadTimeout(READ_TIMEOUT_MS);
+            conn.setConnectTimeout(connectTimeout);
+            conn.setReadTimeout(readTimeout);
             conn.setInstanceFollowRedirects(true);
-            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.0.5");
+            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.0.7");
             conn.setRequestProperty("Accept", "text/plain, */*");
 
             int code;
             try {
                 code = conn.getResponseCode();
             } catch (java.net.SocketTimeoutException e) {
-                throw new SourceError("нет ответа за " + (CONNECT_TIMEOUT_MS / 1000) + " с", 0);
+                throw new SourceError("нет ответа за " + (connectTimeout / 1000) + " с", 0);
             }
             if (code == 404 || code == 410 || code == 451) {
                 throw new SourceError("HTTP " + code + " — источника больше нет", code);
@@ -453,7 +458,7 @@ public final class ConfigRepository {
             }
 
             ByteArrayOutputStream buf = new ByteArrayOutputStream();
-            long deadline = System.currentTimeMillis() + SOURCE_BUDGET_MS;
+            long deadline = System.currentTimeMillis() + budget;
             try (InputStream in = conn.getInputStream()) {
                 byte[] chunk = new byte[16384];
                 int n;
@@ -464,10 +469,10 @@ public final class ConfigRepository {
                         n = in.read(chunk);
                     } catch (java.net.SocketTimeoutException e) {
                         if (total == 0) {
-                            throw new SourceError("данные не пошли за " + (READ_TIMEOUT_MS / 1000) + " с", 0);
+                            throw new SourceError("данные не пошли за " + (readTimeout / 1000) + " с", 0);
                         }
                         throw new SourceError("данные оборвались на " + (total / 1024)
-                                + " КБ (" + (READ_TIMEOUT_MS / 1000) + " с тишины)", 0);
+                                + " КБ (" + (readTimeout / 1000) + " с тишины)", 0);
                     }
                     if (n < 0) break;
                     buf.write(chunk, 0, n);
