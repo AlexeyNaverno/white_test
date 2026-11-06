@@ -289,7 +289,7 @@ public final class ConfigRepository {
             if (progress != null) progress.onMessage("Прямые источники недоступны — поднимаю Tor…");
             res.viaTor = true;
             if (!TorEngine.ensureStarted(c, 150_000)) {
-                res.messages.add("Tor не поднялся — списки не обновлены");
+                res.messages.add("Tor не поднялся (" + TorEngine.lastError() + ") — списки не обновлены");
             } else {
                 try {
                     for (String src : retryViaTor) {
@@ -441,7 +441,7 @@ public final class ConfigRepository {
             conn.setConnectTimeout(connectTimeout);
             conn.setReadTimeout(readTimeout);
             conn.setInstanceFollowRedirects(true);
-            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.0.7");
+            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.0.8");
             conn.setRequestProperty("Accept", "text/plain, */*");
 
             int code;

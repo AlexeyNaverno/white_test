@@ -49,6 +49,7 @@ public class SettingsActivity extends Activity {
         root.setPadding(dp(16), dp(16), dp(16), dp(32));
         scroll.addView(root);
         setContentView(scroll);
+        Ui.applyInsets(scroll);
 
         // --- скорость ---
         section("Скорость");
@@ -328,7 +329,7 @@ public class SettingsActivity extends Activity {
         root.addView(browser);
 
         TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.0.7\n"
+        footer.setText("Обход Белых Списков 0.0.8\n"
                 + versionLine() + "\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");
         footer.setTextColor(TEXT_DIM);
