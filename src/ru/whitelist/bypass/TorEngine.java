@@ -3,186 +3,126 @@ package ru.whitelist.bypass;
 import android.content.Context;
 import android.content.Intent;
 
+import java.io.BufferedReader;
 import java.io.File;
-import java.io.IOException;
 import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Движок Tor на базе info.guardianproject:tor-android (org.torproject.jni.TorService).
- * Пишет torrc с мостами (по умолчанию — Vanilla из встроенного резерва),
- * ждёт подъёма SOCKS на 127.0.0.1:9050.
+ * Tor — ТОЛЬКО как канал для скачивания списков конфигов, когда прямые источники
+ * (и jsDelivr) недоступны. Как режим обхода не используется.
+ *
+ * Движок: org.torproject.jni.TorService из tor-android. Пишем torrc с мостами
+ * (свои из настроек либо встроенные Vanilla), ждём SOCKS на 127.0.0.1:9050.
  */
 public final class TorEngine {
     private TorEngine() {}
 
     public static final int SOCKS_PORT = 9050;
 
-    // Константы org.torproject.jni.TorService (значения стабильны с 0.4.x)
     private static final String TOR_SERVICE_CLASS = "org.torproject.jni.TorService";
     private static final String ACTION_START = "org.torproject.android.intent.action.START";
     private static final String ACTION_STOP = "org.torproject.android.intent.action.STOP";
-    private static final String EXTRA_SERVICE_PACKAGE_NAME = "org.torproject.android.intent.extra.SERVICE_PACKAGE_NAME";
+    private static final String EXTRA_SERVICE_PACKAGE_NAME =
+            "org.torproject.android.intent.extra.SERVICE_PACKAGE_NAME";
 
     private static File torServiceDir(Context ctx) {
-        // то же, что context.getDir(TorService.class.getSimpleName(), MODE_PRIVATE)
         return ctx.getDir("TorService", Context.MODE_PRIVATE);
     }
 
-    public interface Callback {
-        void onReady(int socksPort);
-        void onError(String message);
-        void onLog(String line);
-    }
-
-    /** torrc: SocksPort 9050 + мосты + пользовательские строки. */
-    public static void writeTorrc(Context ctx) throws IOException {
+    /** torrc: SOCKS на 9050 + мосты + дополнительные строки из настроек. */
+    private static void writeTorrc(Context ctx) throws IOException {
         File dir = torServiceDir(ctx);
         if (!dir.exists()) dir.mkdirs();
-        File torrc = new File(dir, "torrc");
-
         StringBuilder sb = new StringBuilder();
-        sb.append("# Сгенерировано «Обход Белых Списков» ").append(System.currentTimeMillis()).append('\n');
+        sb.append("# Обход Белых Списков: torrc для скачивания списков\n");
         sb.append("SocksPort ").append(SOCKS_PORT).append('\n');
         sb.append("ClientOnly 1\n");
         sb.append("AvoidDiskWrites 1\n");
-
         List<String> bridges = bridges(ctx);
-        if (!bridges.isEmpty()) {
-            sb.append("UseBridges 1\n");
-            for (String b : bridges) {
-                sb.append("Bridge ").append(b).append('\n');
-            }
-        } else {
+        if (bridges.isEmpty()) {
             sb.append("UseBridges 0\n");
+        } else {
+            sb.append("UseBridges 1\n");
+            for (String b : bridges) sb.append("Bridge ").append(b).append('\n');
         }
-
         String extra = Prefs.torExtraTorrc(ctx);
-        if (extra != null && !extra.trim().isEmpty()) {
-            sb.append(extra.trim()).append('\n');
-        }
-
-        try (OutputStream out = new FileOutputStream(torrc)) {
+        if (extra != null && !extra.trim().isEmpty()) sb.append(extra.trim()).append('\n');
+        try (OutputStream out = new FileOutputStream(new File(dir, "torrc"))) {
             out.write(sb.toString().getBytes(StandardCharsets.UTF_8));
         }
     }
 
-    /** Мосты из настроек; если пусто и включён встроенный список — из assets (Vanilla). */
-    public static List<String> bridges(Context ctx) {
-        String userBridges = Prefs.torBridges(ctx);
-        List<String> lines = Prefs.lines(userBridges);
-        if (!lines.isEmpty()) {
-            java.util.Set<String> deadUser = ConfigRepository.loadTorDead(ctx);
-            java.util.ArrayList<String> alive = new java.util.ArrayList<>();
-            for (String l : lines) {
-                String key = ConfigRepository.bridgeKey(l);
-                if (key != null && deadUser.contains(key)) continue;
-                alive.add(l);
-            }
-            return alive;
-        }
-        if (!Prefs.torBuiltin(ctx)) return lines;
-        java.util.Set<String> dead = ConfigRepository.loadTorDead(ctx);
-        // 1) «проверенные» мосты (прошли массовый TLS-тест) — приоритет, до 60 в torrc
-        java.util.ArrayList<String> combined = new java.util.ArrayList<>();
-        java.util.LinkedHashSet<String> usedKeys = new java.util.LinkedHashSet<>();
-        for (String t : ConfigRepository.loadTorGood(ctx)) {
-            String key = ConfigRepository.bridgeKey(t);
-            if (key == null || dead.contains(key) || !usedKeys.add(key)) continue;
-            combined.add(t);
-            if (combined.size() >= 60) break;
-        }
-        // 2) автоскачанный резерв (фоновая догрузка при быстром канале), если свежий
-        java.util.ArrayList<String> auto = new java.util.ArrayList<>();
-        long autoAt = Prefs.torBridgesAutoAt(ctx);
-        if (autoAt > 0 && System.currentTimeMillis() - autoAt < 14L * 24 * 3600 * 1000) {
-            try (java.io.BufferedReader r = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(new java.io.FileInputStream(
-                            new java.io.File(ctx.getFilesDir(), "tor_bridges_auto.txt")),
-                            StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = r.readLine()) != null && auto.size() < 60) {
-                    String t = line.trim();
-                    if (t.isEmpty() || t.startsWith("#")) continue;
-                    if (t.regionMatches(true, 0, "Bridge ", 0, 7)) t = t.substring(7).trim();
-                    if (t.matches("^(\\d{1,3}\\.){3}\\d{1,3}:\\d{1,5}(\\s+[0-9A-Fa-f]{40,})?$")) {
-                        String key = ConfigRepository.bridgeKey(t);
-                        if (key != null && dead.contains(key)) continue;
-                        auto.add(t);
-                    }
-                }
-            } catch (java.io.IOException ignored) {
-            }
-        }
-        for (String t : auto) {
-            if (combined.size() >= 60) break;
-            String key = ConfigRepository.bridgeKey(t);
-            if (key != null && !usedKeys.add(key)) continue;
-            combined.add(t);
-        }
-        if (combined.size() >= 10) return combined;
-        // встроенный резерв: vanilla-мосты (работают без внешних плагинов)
-        java.util.ArrayList<String> out = new java.util.ArrayList<>();
-        try (java.io.InputStream in = ctx.getAssets().open("fallback/tor_bridges_vanilla.txt")) {
-            java.io.BufferedReader r = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(in, StandardCharsets.UTF_8));
+    /** Свои мосты из настроек, иначе встроенные Vanilla (до 30 строк). */
+    private static List<String> bridges(Context ctx) {
+        List<String> user = Prefs.lines(Prefs.torBridges(ctx));
+        if (!user.isEmpty()) return trimmed(user, 30);
+        List<String> builtin = new ArrayList<>();
+        try (InputStream in = ctx.getAssets().open("fallback/tor_bridges_vanilla.txt");
+             BufferedReader r = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
             String line;
-            while ((line = r.readLine()) != null) {
+            while ((line = r.readLine()) != null && builtin.size() < 30) {
                 String t = line.trim();
                 if (t.isEmpty() || t.startsWith("#")) continue;
-                // формат: "Bridge <ip:port>" или просто "<ip:port>"
                 if (t.regionMatches(true, 0, "Bridge ", 0, 7)) t = t.substring(7).trim();
                 if (t.matches("^(\\d{1,3}\\.){3}\\d{1,3}:\\d{1,5}$") || t.matches("^[^\\s:]+:\\d{1,5}$")) {
-                    String key = ConfigRepository.bridgeKey(t);
-                    if (key != null && dead.contains(key)) continue; // не пробуем мёртвый встроенный
-                    out.add(t);
+                    builtin.add(t);
                 }
-                if (out.size() >= 60) break; // не перегружаем torrc
             }
         } catch (IOException ignored) {
+        }
+        return builtin;
+    }
+
+    private static List<String> trimmed(List<String> in, int max) {
+        List<String> out = new ArrayList<>();
+        for (String s : in) {
+            if (out.size() >= max) break;
+            out.add(s.trim());
         }
         return out;
     }
 
-    public static void start(Context ctx, Callback callback) {
+    /**
+     * Поднять Tor и дождаться SOCKS. Блокирующий вызов — только из фонового потока.
+     * true — SOCKS открыт, false — не успели/не вышло.
+     */
+    public static boolean ensureStarted(Context ctx, long timeoutMs) {
+        if (socksOpen()) return true;
         try {
             writeTorrc(ctx);
         } catch (IOException e) {
-            callback.onError("не удалось записать torrc: " + e.getMessage());
-            return;
+            return false;
         }
-        Intent intent = new Intent().setClassName(ctx, TOR_SERVICE_CLASS);
-        intent.setAction(ACTION_START);
-        intent.putExtra(EXTRA_SERVICE_PACKAGE_NAME, ctx.getPackageName());
         try {
+            Intent intent = new Intent().setClassName(ctx, TOR_SERVICE_CLASS);
+            intent.setAction(ACTION_START);
+            intent.putExtra(EXTRA_SERVICE_PACKAGE_NAME, ctx.getPackageName());
             ctx.startService(intent);
         } catch (Exception e) {
-            callback.onError("не удалось запустить TorService: " + e.getMessage());
-            return;
+            return false;
         }
-        if (callback != null) callback.onLog("[tor] TorService запущен, ждём цепочку…");
-        waitForSocks(callback, 150_000);
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (socksOpen()) return true;
+            if (ConfigRepository.isCancelled()) return false;
+            try {
+                Thread.sleep(2000);
+            } catch (InterruptedException e) {
+                return false;
+            }
+        }
+        return false;
     }
 
-    private static void waitForSocks(final Callback callback, long timeoutMs) {
-        // Блокирующее ожидание: вызывается из фонового потока VPN-сервиса
-        final long deadline = System.currentTimeMillis() + timeoutMs;
-        while (System.currentTimeMillis() < deadline) {
-            long ms = NetChecker.tcpPing("127.0.0.1", SOCKS_PORT, 1500);
-            if (ms >= 0) {
-                if (callback != null) callback.onReady(SOCKS_PORT);
-                return;
-            }
-            try {
-                Thread.sleep(1500);
-            } catch (InterruptedException ignored) {
-                return;
-            }
-        }
-        if (callback != null) callback.onError("Tor не поднялся за " + (timeoutMs / 1000)
-                + " c. Проверьте мосты и сеть.");
+    private static boolean socksOpen() {
+        return NetChecker.tcpPing("127.0.0.1", SOCKS_PORT, 1500) >= 0;
     }
 
     public static void stop(Context ctx) {

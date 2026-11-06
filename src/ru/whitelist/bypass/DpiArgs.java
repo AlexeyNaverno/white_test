@@ -1,7 +1,5 @@
 package ru.whitelist.bypass;
 
-import android.content.Context;
-
 import java.util.ArrayList;
 import java.util.List;
 
