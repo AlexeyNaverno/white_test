@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   build:
@@ -55,10 +56,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tail -c 4000 /tmp/build.log > /tmp/tail.txt || echo "нет лога" > /tmp/tail.txt
-          printf '```\n%s\n```\n' "$(cat /tmp/tail.txt)" > /tmp/body.txt
-          gh api "repos/${{ github.repository }}/issues/5/comments" -F body=@/tmp/body.txt > /dev/null || \
-            gh pr comment 5 --body-file /tmp/body.txt || true
+          tail -c 6000 /tmp/build.log > /tmp/tail.txt || true
+          python3 -c "import json;b=open('/tmp/tail.txt',encoding='utf-8',errors='replace').read();print(json.dumps({'body':'```\n'+b+'\n```'}))" > /tmp/body.json
+          gh api "repos/${{ github.repository }}/issues/5/comments" --input /tmp/body.json || true
 
       - name: Проверка артефакта (жёсткие ассерты)
         run: |
