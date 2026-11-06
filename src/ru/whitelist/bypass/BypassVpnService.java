@@ -31,6 +31,8 @@ public class BypassVpnService extends VpnService {
 
     public static final String ACTION_START = "ru.whitelist.bypass.action.START";
     public static final String ACTION_STOP = "ru.whitelist.bypass.action.STOP";
+    /** Кнопка в уведомлении: сменить конфиг, не отключая туннель. */
+    public static final String ACTION_SWITCH = "ru.whitelist.bypass.action.SWITCH";
     public static final String ACTION_STATUS = "ru.whitelist.bypass.action.STATUS";
     public static final String EXTRA_STATE = "state";    // off | connecting | on | error
     public static final String EXTRA_DETAIL = "detail";
@@ -98,6 +100,19 @@ public class BypassVpnService extends VpnService {
         String action = intent != null ? intent.getAction() : null;
         if (ACTION_STOP.equals(action)) {
             stopEverything();
+            return START_NOT_STICKY;
+        }
+        if (ACTION_SWITCH.equals(action)) {
+            if (running.get()) {
+                sendStatus("connecting", "Переключаю конфиг…");
+                Thread switcher = new Thread(new Runnable() {
+                    @Override public void run() { switchToNext(); }
+                }, "bypass-switch");
+                switcher.setDaemon(true);
+                switcher.start();
+            } else {
+                sendStatus("off", "Туннель не запущен");
+            }
             return START_NOT_STICKY;
         }
         if (ACTION_START.equals(action)) {
@@ -533,21 +548,60 @@ public class BypassVpnService extends VpnService {
         }
     }
 
-    private void startForegroundCompat() {
-        PendingIntent pi = PendingIntent.getActivity(this, 0,
-                new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
+    /** Уведомление с двумя действиями: «Остановить» и «Переключить». */
+    private Notification buildNotification(String text) {
+        PendingIntent open = PendingIntent.getActivity(this, 0,
+                new Intent(this, MainActivity.class),
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        PendingIntent stop = PendingIntent.getService(this, 1,
+                new Intent(this, BypassVpnService.class).setAction(ACTION_STOP),
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        PendingIntent swtch = PendingIntent.getService(this, 2,
+                new Intent(this, BypassVpnService.class).setAction(ACTION_SWITCH),
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+
         Notification.Builder builder;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             builder = new Notification.Builder(this, CHANNEL_ID);
         } else {
             builder = new Notification.Builder(this);
         }
-        builder.setSmallIcon(R.drawable.ic_launcher)
+        builder.setSmallIcon(R.drawable.ic_stat_notify)
                 .setContentTitle("Обход Белых Списков")
-                .setContentText("Подключение…")
+                .setContentText(text)
+                .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setOngoing(true)
-                .setContentIntent(pi);
-        Notification notification = builder.build();
+                .setOnlyAlertOnce(true)
+                .setShowWhen(false)
+                .setContentIntent(open)
+                .addAction(R.drawable.ic_stat_stop, "Остановить", stop)
+                .addAction(R.drawable.ic_stat_switch, "Переключить", swtch);
+        return builder.build();
+    }
+
+    /** Обновить текст уведомления (снимается в stopForegroundCompat). */
+    private void updateNotification(String state, String detail) {
+        if (!running.get() && !"connecting".equals(state)) return;
+        String text;
+        if ("on".equals(state)) {
+            text = (detail == null || detail.isEmpty()) ? "Подключено" : detail;
+        } else if ("connecting".equals(state)) {
+            text = (detail == null || detail.isEmpty()) ? "Подключение…" : detail;
+        } else if ("error".equals(state)) {
+            text = "Ошибка: " + (detail == null ? "" : detail);
+        } else {
+            return;
+        }
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            if (nm != null) nm.notify(NOTIFICATION_ID, buildNotification(truncate(text, 110)));
+        } catch (Throwable t) {
+            Log.w(TAG, "не удалось обновить уведомление", t);
+        }
+    }
+
+    private void startForegroundCompat() {
+        Notification notification = buildNotification("Подключение…");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIFICATION_ID, notification,
                     android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED);
@@ -565,6 +619,7 @@ public class BypassVpnService extends VpnService {
 
     private void sendStatus(String state, String detail) {
         connectingFlag = "connecting".equals(state);
+        if (!"off".equals(state)) updateNotification(state, detail);
         Intent i = new Intent(ACTION_STATUS);
         i.setPackage(getPackageName());
         i.putExtra(EXTRA_STATE, state);
