@@ -45,6 +45,12 @@ public final class Prefs {
     public static final String BOOT_CONNECT = "boot_connect";
     public static final String EMBEDDED = "embedded_enabled";
     public static final String TOR_BRIDGES = "tor_bridges";
+    /** Замеры мостов: «мост<TAB>КБ/с<TAB>мс», лучшие сверху. */
+    public static final String TOR_BRIDGE_RANK = "tor_bridge_rank";
+    /** Человеческий отчёт последней проверки мостов и источников через Tor. */
+    public static final String TOR_REPORT = "tor_report";
+    /** Браузер (экспериментально): открывать страницы через Tor. */
+    public static final String BROWSER_TOR = "browser_tor";
     public static final String TOR_EXTRA_TORRC = "tor_extra_torrc";
     public static final String CURRENT_RAW = "current_raw";
     public static final String CURRENT_NAME = "current_name";
@@ -308,6 +314,26 @@ public final class Prefs {
 
     public static String torBridges(Context c) {
         return get(c).getString(TOR_BRIDGES, "");
+    }
+
+    public static String torBridgeRank(Context c) {
+        return get(c).getString(TOR_BRIDGE_RANK, "");
+    }
+
+    public static void setTorBridgeRank(Context c, String v) {
+        get(c).edit().putString(TOR_BRIDGE_RANK, v == null ? "" : v).apply();
+    }
+
+    public static String torReport(Context c) {
+        return get(c).getString(TOR_REPORT, "");
+    }
+
+    public static void setTorReport(Context c, String v) {
+        get(c).edit().putString(TOR_REPORT, v == null ? "" : v).apply();
+    }
+
+    public static boolean browserTor(Context c) {
+        return get(c).getBoolean(BROWSER_TOR, false);
     }
 
     public static void setTorBridges(Context c, String v) {

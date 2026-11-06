@@ -12,6 +12,10 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 
 /**
@@ -25,6 +29,13 @@ public final class TorEngine {
     private TorEngine() {}
 
     public static final int SOCKS_PORT = 9050;
+    /**
+     * HTTP-туннель поверх Tor (torrc: HTTPTunnelPort). Держим включённым как запасной
+     * путь для инструментов, которым нужен именно HTTP-прокси: WebView в приложении
+     * работает через SOCKS-перехват (ProxyController — системный API и обычным
+     * приложениям недоступен).
+     */
+    public static final int HTTP_TUNNEL_PORT = 8118;
 
     private static final String TOR_SERVICE_CLASS = "org.torproject.jni.TorService";
     private static final String ACTION_START = "org.torproject.android.intent.action.START";
@@ -36,17 +47,22 @@ public final class TorEngine {
         return ctx.getDir("TorService", Context.MODE_PRIVATE);
     }
 
-    /** torrc: SOCKS на 9050 + мосты + дополнительные строки из настроек. */
+    /** torrc: SOCKS 9050, HTTP-туннель 8118, мосты + дополнительные строки из настроек. */
     private static void writeTorrc(Context ctx) throws IOException {
+        writeTorrc(ctx, bridges(ctx));
+    }
+
+    /** То же, но со своим списком мостов (для проверки конкретного моста). */
+    private static void writeTorrc(Context ctx, List<String> bridges) throws IOException {
         File dir = torServiceDir(ctx);
         if (!dir.exists()) dir.mkdirs();
         StringBuilder sb = new StringBuilder();
         sb.append("# Обход Белых Списков: torrc для скачивания списков\n");
         sb.append("SocksPort ").append(SOCKS_PORT).append('\n');
+        sb.append("HTTPTunnelPort ").append(HTTP_TUNNEL_PORT).append('\n');
         sb.append("ClientOnly 1\n");
         sb.append("AvoidDiskWrites 1\n");
-        List<String> bridges = bridges(ctx);
-        if (bridges.isEmpty()) {
+        if (bridges == null || bridges.isEmpty()) {
             sb.append("UseBridges 0\n");
         } else {
             sb.append("UseBridges 1\n");
@@ -59,8 +75,18 @@ public final class TorEngine {
         }
     }
 
-    /** Свои мосты из настроек, иначе встроенные Vanilla (до 30 строк). */
+    /**
+     * Свои мосты из настроек, иначе встроенные Vanilla, — но если есть замеры скорости
+     * (кнопка «Проверить мосты»), в torrc сначала идут самые быстрые.
+     */
     private static List<String> bridges(Context ctx) {
+        List<String> base = candidateBridges(ctx);
+        List<String> ranked = ranked(base, Prefs.torBridgeRank(ctx));
+        return ranked.isEmpty() ? trimmed(base, 30) : ranked;
+    }
+
+    /** Мосты как они заведены: свои из настроек, иначе встроенные. Без сортировки. */
+    public static List<String> candidateBridges(Context ctx) {
         List<String> user = Prefs.lines(Prefs.torBridges(ctx));
         if (!user.isEmpty()) return trimmed(user, 30);
         List<String> builtin = new ArrayList<>();
@@ -78,6 +104,81 @@ public final class TorEngine {
         } catch (IOException ignored) {
         }
         return builtin;
+    }
+
+    /**
+     * Порядок по замерам: измеренные и работающие — первыми (быстрые выше),
+     * неизмеренные — следом. Если рабочих меньше двух, сортировка не применяется:
+     * лучше пробовать всё, чем остаться без резерва.
+     */
+    private static List<String> ranked(List<String> base, String rankText) {
+        List<String> rankLines = Prefs.lines(rankText);
+        if (rankLines.isEmpty()) return null;
+        final Map<String, Long> kbps = new HashMap<>();
+        for (String line : rankLines) {
+            String[] parts = line.split("\t");
+            if (parts.length < 2) continue;
+            try {
+                kbps.put(parts[0].trim(), Long.parseLong(parts[1].trim()));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        int alive = 0;
+        for (String b : base) {
+            Long k = kbps.get(b);
+            if (k != null && k > 0) alive++;
+        }
+        if (alive < 2) return null;
+        List<String> sorted = new ArrayList<>(base);
+        Collections.sort(sorted, new Comparator<String>() {
+            @Override public int compare(String a, String b) {
+                Long ka = kbps.get(a);
+                Long kb = kbps.get(b);
+                long va = ka == null ? -1 : ka;
+                long vb = kb == null ? -1 : kb;
+                return Long.compare(vb, va);
+            }
+        });
+        List<String> out = new ArrayList<>();
+        for (String b : sorted) {
+            Long k = kbps.get(b);
+            if (k != null && k > 0) out.add(b);
+        }
+        return out.size() >= 2 ? trimmed(out, 6) : null;
+    }
+
+    /** Поднять Tor с конкретным списком мостов (проверка моста). */
+    public static boolean startWith(Context ctx, List<String> bridges, long timeoutMs) {
+        try {
+            writeTorrc(ctx, bridges);
+        } catch (IOException e) {
+            return false;
+        }
+        return startServiceAndWait(ctx, timeoutMs);
+    }
+
+    /** Перезапуск Tor: дождаться, пока старый процесс отпустит порт, и поднять заново. */
+    public static boolean restart(Context ctx, long timeoutMs) {
+        stopAndWait(ctx, 8000);
+        return ensureStarted(ctx, timeoutMs);
+    }
+
+    public static void stopAndWait(Context ctx, long timeoutMs) {
+        stop(ctx);
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (!socksOpen()) return;
+            try {
+                Thread.sleep(300);
+            } catch (InterruptedException e) {
+                return;
+            }
+        }
+    }
+
+    /** HTTP-туннель для браузера (8118) открыт? */
+    public static boolean httpTunnelOpen() {
+        return NetChecker.tcpPing("127.0.0.1", HTTP_TUNNEL_PORT, 1500) >= 0;
     }
 
     private static List<String> trimmed(List<String> in, int max) {
@@ -100,6 +201,10 @@ public final class TorEngine {
         } catch (IOException e) {
             return false;
         }
+        return startServiceAndWait(ctx, timeoutMs);
+    }
+
+    private static boolean startServiceAndWait(Context ctx, long timeoutMs) {
         try {
             Intent intent = new Intent().setClassName(ctx, TOR_SERVICE_CLASS);
             intent.setAction(ACTION_START);

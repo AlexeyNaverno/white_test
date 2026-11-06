@@ -161,6 +161,8 @@ public final class Probe {
     public static Result measureConfig(Context ctx, ProxyConfig cfg, int timeoutMs) {
         if (cfg == null) return Result.fail("пустой конфиг");
         if (!cfg.supported) return Result.fail("схема " + cfg.scheme + " не поддерживается");
+        String bad = XrayEngine.compatProblem(cfg);
+        if (bad != null) return Result.fail("несовместим с ядром: " + bad);
         if (ConfigRepository.isCancelled()) return Result.fail("поиск остановлен");
         int port = freePort();
         if (port <= 0) return Result.fail("нет свободного порта");

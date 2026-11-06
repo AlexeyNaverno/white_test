@@ -29,6 +29,108 @@ public final class XrayEngine {
     private static CoreController controller;
     private static boolean envInitialized = false;
 
+    /** Транспорты, которые умеет текущее ядро. kcp/quic/domainsocket — не умеет. */
+    private static final java.util.Set<String> NETWORKS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "tcp", "ws", "grpc", "h2", "http", "httpupgrade", "xhttp", "splithttp"));
+
+    /** Шифрование, которое умеет ядро. xtls из Xray убран, «none» — без TLS. */
+    private static final java.util.Set<String> SECURITIES = new java.util.HashSet<>(java.util.Arrays.asList(
+            "none", "tls", "reality"));
+
+    /** Методы Shadowsocks, которые ядро реально поддерживает. */
+    private static final java.util.Set<String> SS_METHODS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "aes-128-gcm", "aes-256-gcm", "chacha20-poly1305", "chacha20-ietf-poly1305",
+            "xchacha20-poly1305", "xchacha20-ietf-poly1305",
+            "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm",
+            "2022-blake3-chacha20-poly1305",
+            "none", "plain"));
+
+    private static final java.util.regex.Pattern UUID_RE = java.util.regex.Pattern.compile(
+            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+
+    public static boolean isUuid(String v) {
+        return v != null && UUID_RE.matcher(v.trim()).matches();
+    }
+
+    /**
+     * Почему ядро не сможет поднять этот конфиг. null — можно пробовать.
+     *
+     * Проверка нужна потому, что TCP-пинг проходит у любого живого порта, а startLoop
+     * падает уже внутри ядра — и в логе это выглядело как «xray startLoop failed»
+     * у конфига, который «проверен на пинг».
+     */
+    public static String compatProblem(ProxyConfig cfg) {
+        if (cfg == null) return "пустой конфиг";
+        if (!cfg.supported) {
+            return cfg.unsupportedReason != null ? cfg.unsupportedReason : "схема не поддерживается";
+        }
+        Map<String, String> p = cfg.params();
+        String network = firstNonEmpty(p.get("type"), "tcp").toLowerCase();
+        String security = firstNonEmpty(p.get("security"),
+                "trojan".equals(cfg.scheme) ? "tls" : "none").toLowerCase();
+        String flow = p.get("flow");
+
+        if (!NETWORKS.contains(network)) {
+            return "транспорт «" + network + "» ядро не умеет";
+        }
+        if (!SECURITIES.contains(security)) {
+            return "шифрование «" + security + "» ядро не умеет";
+        }
+        if (flow != null && !flow.isEmpty()) {
+            if (!"xtls-rprx-vision".equals(flow)) {
+                return "flow «" + flow + "» устарел, ядро его не знает";
+            }
+            if (!"tcp".equals(network)) return "flow xtls-rprx-vision работает только на tcp";
+            if (!"tls".equals(security) && !"reality".equals(security)) {
+                return "flow xtls-rprx-vision без TLS не работает";
+            }
+        }
+        if ("reality".equals(security)) {
+            String pbk = firstNonEmpty(p.get("pbk"), p.get("publicKey"));
+            if (pbk.isEmpty()) return "reality без publicKey (pbk)";
+            if (pbk.length() < 40) return "reality: publicKey короче 43 символов";
+            if (firstNonEmpty(p.get("sni"), p.get("peer")).isEmpty()) return "reality без sni";
+        }
+        if ("vless".equals(cfg.scheme)) {
+            String enc = p.get("encryption");
+            if (enc != null && !enc.isEmpty() && !"none".equalsIgnoreCase(enc)) {
+                return "vless: encryption=" + enc + " не поддерживается";
+            }
+            if (!isUuid(cfg.userInfo())) return "vless: id не UUID";
+        }
+        if ("vmess".equals(cfg.scheme)) {
+            String id = vmessJson(cfg).optString("id");
+            if (!isUuid(id)) return "vmess: id не UUID";
+        }
+        if ("ss".equals(cfg.scheme) || "shadowsocks".equals(cfg.scheme)) {
+            String method = ssMethod(cfg);
+            if (method == null || !SS_METHODS.contains(method.toLowerCase())) {
+                return "ss: метод «" + (method != null ? method : "?") + "» не поддерживается";
+            }
+            if (ssPassword(cfg) == null || ssPassword(cfg).isEmpty()) return "ss: нет пароля";
+        }
+        return null;
+    }
+
+    /** Метод Shadowsocks: из параметров ссылки или из userinfo (base64 method:password). */
+    private static String ssMethod(ProxyConfig cfg) {
+        Map<String, String> p = cfg.params();
+        String method = p.get("method");
+        if (method != null && !method.isEmpty()) return method;
+        String userInfo = cfg.ssUserInfo();
+        int colon = userInfo.indexOf(':');
+        return colon > 0 ? userInfo.substring(0, colon) : null;
+    }
+
+    private static String ssPassword(ProxyConfig cfg) {
+        Map<String, String> p = cfg.params();
+        String password = p.get("password");
+        if (password != null && !password.isEmpty()) return password;
+        String userInfo = cfg.ssUserInfo();
+        int colon = userInfo.indexOf(':');
+        return colon > 0 ? userInfo.substring(colon + 1) : null;
+    }
+
     public static synchronized String version() {
         try {
             return Libv2ray.checkVersionX();
@@ -169,16 +271,8 @@ public final class XrayEngine {
             case "ss":
             case "shadowsocks": {
                 out.put("protocol", "shadowsocks");
-                String userInfo = cfg.ssUserInfo();
-                String method = p.get("method");
-                String password = p.get("password");
-                if (method == null || password == null) {
-                    int colon = userInfo.indexOf(':');
-                    if (colon > 0) {
-                        if (method == null) method = userInfo.substring(0, colon);
-                        if (password == null) password = userInfo.substring(colon + 1);
-                    }
-                }
+                String method = ssMethod(cfg);
+                String password = ssPassword(cfg);
                 JSONArray servers = new JSONArray();
                 servers.put(new JSONObject()
                         .put("address", cfg.host).put("port", cfg.port)
@@ -255,6 +349,17 @@ public final class XrayEngine {
             case "grpc": {
                 stream.put("grpcSettings", new JSONObject().put("serviceName",
                         firstNonEmpty(p.get("serviceName"), path)));
+                break;
+            }
+            case "http":
+            case "h2": {
+                stream.put("network", "h2");
+                JSONObject h2 = new JSONObject()
+                        .put("path", path != null && !path.isEmpty() ? path : "/");
+                if (hostHeader != null && !hostHeader.isEmpty()) {
+                    h2.put("host", new JSONArray().put(hostHeader));
+                }
+                stream.put("h2Settings", h2);
                 break;
             }
             case "httpupgrade": {
@@ -335,7 +440,10 @@ public final class XrayEngine {
         };
         try {
             controller = Libv2ray.newCoreController(handler);
-            controller.startLoop(configJson, 0);
+            if (!controller.startLoop(configJson, 0)) {
+                stop();
+                if (callback != null) callback.onError("ядро отклонило конфиг (startLoop = false)");
+            }
         } catch (Exception e) {
             if (callback != null) callback.onError(String.valueOf(e.getMessage()));
         }
@@ -361,14 +469,22 @@ public final class XrayEngine {
             @Override public long startup() { return 0; }
         };
         CoreController c = Libv2ray.newCoreController(handler);
+        boolean ok = false;
         try {
-            c.startLoop(configJson, 0);
+            ok = c.startLoop(configJson, 0);
         } catch (Exception e) {
             try {
                 c.stopLoop();
             } catch (Exception ignored) {
             }
-            throw new IllegalStateException("xray startLoop failed: " + e.getMessage(), e);
+            throw new IllegalStateException("ядро не запустилось: " + e.getMessage(), e);
+        }
+        if (!ok) {
+            try {
+                c.stopLoop();
+            } catch (Exception ignored) {
+            }
+            throw new IllegalStateException("ядро отклонило конфиг (startLoop = false)");
         }
         return c;
     }
