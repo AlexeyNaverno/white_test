@@ -131,6 +131,19 @@ zipalign -p -f 4 app-unsigned.apk app-aligned.apk
 apksigner sign --ks my-release.jks --out WhitelistBypass.apk app-aligned.apk
 ```
 
+### Сборка на GitHub Actions (без локального SDK)
+
+`.github/workflows/build-apk.yml` собирает APK на раннере: JDK 17, Android SDK
+(platform 36 + build-tools 36.0.0), `tools/fetch_deps.sh`, `build.sh`. Затем жёстко
+проверяет результат — `versionName`, подпись по SHA-256 сертификата `debug.keystore`,
+наличие `classes.dex` и всех `.so` — и прикладывает к релизу три файла:
+`WhitelistBypass-0.0.1.apk`, `apk.sha256`, `build-report.txt` (badging, содержимое
+APK, сертификат, размер).
+
+```bash
+git tag v0.0.1 && git push origin v0.0.1     # соберёт и обновит релиз v0.0.1
+```
+
 Зависимости, которые тянет `fetch_deps`: `libv2ray.aar` (AndroidLibXrayLite 26.10.31),
 `tor-android.aar` 0.4.9.13.2, `jtorctl`, `kotlin-stdlib`, `localbroadcastmanager`.
 Нативные `libbyedpi.so` (ciadpi + hev-socks5-tunnel + JNI) лежат готовыми в `jniLibs/`;
