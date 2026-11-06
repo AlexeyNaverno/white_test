@@ -46,38 +46,39 @@ jobs:
           set -euo pipefail
           BT=$(ls -d "$ANDROID_SDK"/build-tools/* | sort -V | tail -1)
           export PATH="$BT:$PATH"
+          mv WhitelistBypass.apk WhitelistBypass-0.0.1.apk
+          APK=WhitelistBypass-0.0.1.apk
+          sha256sum "$APK" | tee apk.sha256
           {
             echo "### aapt2 badging"
-            aapt2 dump badging WhitelistBypass.apk | grep -E "^package:|application-label|sdkVersion|targetSdkVersion|native-code"
+            aapt2 dump badging "$APK" | grep -E "^package:|application-label|sdkVersion|targetSdkVersion|native-code"
             echo
-            echo "### содержимое APK"
-            unzip -l WhitelistBypass.apk | grep -E "classes.dex|lib/|resources.arsc|AndroidManifest" | sed 's/  */ /g'
+            echo "### содержимое APK (фрагмент)"
+            unzip -l "$APK" | grep -E "classes.dex|lib/.*\\.so|resources.arsc|AndroidManifest" | awk '{print $1, $4}'
             echo
             echo "### подпись"
-            apksigner verify --print-certs WhitelistBypass.apk | grep -E "Verifies|Signer #1 certificate (DN|SHA-256)"
+            apksigner verify --print-certs "$APK" | grep -E "Verifies|Signer #1 certificate (DN|SHA-256)"
             echo
-            echo "### контрольная сумма"
-            sha256sum WhitelistBypass-0.0.1.apk
+            echo "### размер"
+            du -h "$APK"
           } 2>&1 | tee build-report.txt
-          # ассерты: без них шаг зелёный даже при «не том» APK
-          aapt2 dump badging WhitelistBypass.apk | grep -q "package: name='ru.whitelist.bypass'"
-          aapt2 dump badging WhitelistBypass.apk | grep -q "versionName='0.0.1'"
-          apksigner verify --print-certs WhitelistBypass.apk \
+          aapt2 dump badging "$APK" | grep -q "package: name='ru.whitelist.bypass'"
+          aapt2 dump badging "$APK" | grep -q "versionName='0.0.1'"
+          apksigner verify --print-certs "$APK" \
             | grep -qi "de18cb65d3aadc1f7b53372fe896565df2b40f51b9238e4ccef898206dc8d515" \
             || { echo "::error::подпись не совпадает с debug.keystore из репозитория"; exit 1; }
-          unzip -l WhitelistBypass.apk | grep -q "classes.dex"
-          unzip -l WhitelistBypass.apk | grep -q "lib/arm64-v8a/libgojni.so"
-          unzip -l WhitelistBypass.apk | grep -q "lib/arm64-v8a/libtor.so"
-          unzip -l WhitelistBypass.apk | grep -q "lib/arm64-v8a/libbyedpi.so"
+          unzip -l "$APK" | grep -q "classes.dex"
+          unzip -l "$APK" | grep -q "lib/arm64-v8a/libgojni.so"
+          unzip -l "$APK" | grep -q "lib/arm64-v8a/libtor.so"
+          unzip -l "$APK" | grep -q "lib/arm64-v8a/libbyedpi.so"
           sha256sum -c apk.sha256
-          rm -f *.idsig WhitelistBypass.apk
-          mv WhitelistBypass-0.0.1.apk WhitelistBypass.apk 2>/dev/null || true
+          rm -f *.idsig
 
       - uses: actions/upload-artifact@v4
         with:
           name: WhitelistBypass-0.0.1
           path: |
-            WhitelistBypass.apk
+            WhitelistBypass-0.0.1.apk
             apk.sha256
             build-report.txt
 
@@ -88,7 +89,6 @@ jobs:
         run: |
           set -euo pipefail
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && gh release delete "$GITHUB_REF_NAME" -y || true
-          cp WhitelistBypass.apk WhitelistBypass-0.0.1.apk
           { cat RELEASE_NOTES.md
             printf '\n### Сборка\n\nСобрано на GitHub Actions из коммита `%s` (JDK 17, build-tools 36.0.0).\n\n' "$GITHUB_SHA"
             printf '```\n'; cat build-report.txt; printf '```\n'
