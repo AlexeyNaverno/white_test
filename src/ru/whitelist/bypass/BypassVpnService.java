@@ -57,6 +57,8 @@ public class BypassVpnService extends VpnService {
     private static final AtomicBoolean running = new AtomicBoolean(false);
     private static volatile boolean connectingFlag = false;
     private static volatile String currentDetail = "";
+    /** Автоподбор стратегии DPI делаем один раз за подключение, а не на каждую попытку. */
+    private boolean dpiAutotuned = false;
     private static volatile int currentSocksPort = -1;
 
     public static boolean isRunning() { return running.get(); }
@@ -117,6 +119,7 @@ public class BypassVpnService extends VpnService {
         }
         if (ACTION_START.equals(action)) {
             if (running.get() || tun != null) resetEngine(); // повторный старт = перезапуск
+            dpiAutotuned = false;
             stopRequested.set(false);
             ConfigRepository.clearCancel();
             lastError = "";
@@ -311,6 +314,21 @@ public class BypassVpnService extends VpnService {
             String sni = cfg != null ? cfg.tlsServerName() : null;
             if (sni == null || sni.isEmpty()) {
                 sni = (cfg != null && cfg.host != null && !cfg.host.isEmpty()) ? cfg.host : "www.youtube.com";
+            }
+            // Один раз за сессию: если разрешено, ищем стратегию, которая реально пробивает
+            // блокировки у текущего провайдера, и подставляем её вместо сохранённой вручную.
+            if (Prefs.dpiAutotune(this) && !dpiAutotuned) {
+                dpiAutotuned = true;
+                sendStatus("connecting", "Подбираю стратегию обхода DPI…");
+                Log.i(TAG, "DPI: автоподбор, стартовая — " + DpiStrategies.shorten(Prefs.dpiStrategy(this)));
+                String chosen = DpiStrategies.autotune(this, sni, new DpiStrategies.Log() {
+                    @Override public void line(String message) {
+                        Log.i(TAG, message);
+                        sendStatus("connecting", message);
+                    }
+                });
+                Log.i(TAG, "DPI: выбрана " + DpiStrategies.shorten(chosen));
+                sendStatus("connecting", "Стратегия обхода: " + DpiStrategies.shorten(chosen));
             }
             int port = Probe.freePort();
             if (port <= 0) return 0;
