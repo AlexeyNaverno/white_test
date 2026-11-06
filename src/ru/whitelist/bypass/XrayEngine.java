@@ -440,10 +440,9 @@ public final class XrayEngine {
         };
         try {
             controller = Libv2ray.newCoreController(handler);
-            if (!controller.startLoop(configJson, 0)) {
-                stop();
-                if (callback != null) callback.onError("ядро отклонило конфиг (startLoop = false)");
-            }
+            // startLoop в libv2ray ничего не возвращает: отказ виден либо исключением,
+            // либо тем, что локальный SOCKS так и не открылся (это проверяет вызывающий).
+            controller.startLoop(configJson, 0);
         } catch (Exception e) {
             if (callback != null) callback.onError(String.valueOf(e.getMessage()));
         }
@@ -469,22 +468,14 @@ public final class XrayEngine {
             @Override public long startup() { return 0; }
         };
         CoreController c = Libv2ray.newCoreController(handler);
-        boolean ok = false;
         try {
-            ok = c.startLoop(configJson, 0);
+            c.startLoop(configJson, 0);
         } catch (Exception e) {
             try {
                 c.stopLoop();
             } catch (Exception ignored) {
             }
             throw new IllegalStateException("ядро не запустилось: " + e.getMessage(), e);
-        }
-        if (!ok) {
-            try {
-                c.stopLoop();
-            } catch (Exception ignored) {
-            }
-            throw new IllegalStateException("ядро отклонило конфиг (startLoop = false)");
         }
         return c;
     }
