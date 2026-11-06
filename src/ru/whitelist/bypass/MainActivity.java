@@ -65,12 +65,15 @@ public class MainActivity extends Activity {
             if (on) {
                 statusPill.setText("● Подключено");
                 statusPill.setTextColor(ACCENT);
+                stylePowerButton("on");
             } else if (BypassVpnService.isConnecting()) {
                 statusPill.setText("● Подключение…");
                 statusPill.setTextColor(ORANGE);
+                stylePowerButton("connecting");
             } else {
                 statusPill.setText("● Отключено");
                 statusPill.setTextColor(TEXT_DIM);
+                stylePowerButton("off");
             }
             applyRunningUi(on);
             refreshPoolCard();
@@ -141,21 +144,32 @@ public class MainActivity extends Activity {
         root.addView(statusPill);
 
         // главная кнопка
+        LinearLayout powerWrap = new LinearLayout(this);
+        powerWrap.setGravity(Gravity.CENTER_HORIZONTAL);
+        LinearLayout.LayoutParams wrapLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        wrapLp.topMargin = dp(22);
+        wrapLp.bottomMargin = dp(6);
+        powerWrap.setLayoutParams(wrapLp);
+
         powerButton = new Button(this);
         powerButton.setText("Подключить");
         powerButton.setTextSize(20);
         powerButton.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        powerButton.setTextColor(TEXT);
         powerButton.setAllCaps(false);
-        powerButton.setBackgroundColor(SURFACE2);
-        LinearLayout.LayoutParams powerLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(96));
-        powerLp.topMargin = dp(18);
-        powerButton.setLayoutParams(powerLp);
+        powerButton.setPadding(0, 0, 0, 0);
+        powerButton.setMinWidth(0);
+        powerButton.setMinHeight(0);
+        powerButton.setStateListAnimator(null);
+        int powerSize = dp(184);
+        powerButton.setLayoutParams(new LinearLayout.LayoutParams(powerSize, powerSize));
+        powerButton.setElevation(dp(8));
         powerButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { toggleConnection(); }
         });
-        root.addView(powerButton);
+        stylePowerButton("off");
+        powerWrap.addView(powerButton);
+        root.addView(powerWrap);
 
         // две малые кнопки
         btnQuick = fullWidthButton("Быстрый поиск: найти 1 рабочий VPN");
@@ -245,6 +259,42 @@ public class MainActivity extends Activity {
     }
 
     // ------------------------------------------------------------------ построение виджетов
+
+    /**
+     * Вид большой круглой кнопки: зелёная «Подключить», оранжевая «Отмена»,
+     * красная «Отключить». Так же делают почти все VPN-клиенты.
+     */
+    private void stylePowerButton(String state) {
+        if (powerButton == null) return;
+        int bg;
+        int fg;
+        String text;
+        if ("on".equals(state)) {
+            bg = 0xFFC62828;
+            fg = 0xFFFFFFFF;
+            text = "Отключить";
+        } else if ("connecting".equals(state)) {
+            bg = ORANGE;
+            fg = 0xFF1A1206;
+            text = "Отмена";
+        } else if ("error".equals(state)) {
+            bg = 0xFF8E2A2A;
+            fg = 0xFFFFFFFF;
+            text = "Подключить";
+        } else {
+            bg = ACCENT;
+            fg = 0xFF0E1C12;
+            text = "Подключить";
+        }
+        android.graphics.drawable.GradientDrawable shape =
+                new android.graphics.drawable.GradientDrawable();
+        shape.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        shape.setColor(bg);
+        shape.setStroke(dp(2), 0x40FFFFFF);
+        powerButton.setBackground(shape);
+        powerButton.setTextColor(fg);
+        powerButton.setText(text);
+    }
 
     private Button smallButton(String text) {
         Button b = new Button(this);
@@ -356,26 +406,26 @@ public class MainActivity extends Activity {
         if ("on".equals(state)) {
             statusPill.setText("● Подключено");
             statusPill.setTextColor(ACCENT);
-            powerButton.setText("Отключить");
+            stylePowerButton("on");
             if (detail != null && !detail.isEmpty()) log("Подключено: " + detail);
             applyRunningUi(true);
             refreshPoolCard();
         } else if ("connecting".equals(state)) {
             statusPill.setText("● Подключение…");
             statusPill.setTextColor(ORANGE);
-            powerButton.setText("Отмена");
+            stylePowerButton("connecting");
             if (detail != null) log(detail);
         } else if ("error".equals(state)) {
             statusPill.setText("● Ошибка");
             statusPill.setTextColor(RED);
-            powerButton.setText("Подключить");
+            stylePowerButton("error");
             if (detail != null) log("Ошибка: " + detail);
             applyRunningUi(false);
             refreshPoolCard();
         } else if ("off".equals(state)) {
             statusPill.setText("● Отключено");
             statusPill.setTextColor(TEXT_DIM);
-            powerButton.setText("Подключить");
+            stylePowerButton("off");
             log("Отключено");
             applyRunningUi(false);
             refreshPoolCard();
@@ -386,9 +436,9 @@ public class MainActivity extends Activity {
         if (on) {
             statusPill.setText("● Подключено");
             statusPill.setTextColor(ACCENT);
-            powerButton.setText("Отключить");
+            stylePowerButton("on");
         } else if (!"● Подключение…".contentEquals(statusPill.getText())) {
-            powerButton.setText("Подключить");
+            stylePowerButton("off");
         }
     }
 
@@ -484,7 +534,7 @@ public class MainActivity extends Activity {
         searching = true;
         ConfigRepository.clearCancel();
         setBusy(true, "Сбор пула…");
-        uiLog("Сбор пула: 1) все источники → 2) пинг → 3) скорость");
+        uiLog("Сбор пула: 1) источники (лимит по времени) → 2) пинг → 3) скорость");
 
         new Thread(new Runnable() {
             @Override public void run() {
@@ -496,6 +546,9 @@ public class MainActivity extends Activity {
                             });
                     uiLog("Источники: " + res);
                     for (String m : res.messages) uiLog("· " + m);
+                    if (res.stored == 0 && ConfigRepository.countDownloaded(MainActivity.this) > 0) {
+                        uiLog("Загрузка ничего не дала — работаю с локальным списком");
+                    }
 
                     List<ProxyConfig> all = ConfigRepository.all(MainActivity.this);
                     if (all.isEmpty()) {
@@ -630,11 +683,15 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------------ мелочи
 
     private void setBusy(boolean busy, String label) {
-        btnQuick.setEnabled(!busy);
-        btnPool.setEnabled(!busy);
-        btnQuick.setText(busy ? "Быстрый поиск: остановить" : "Быстрый поиск: найти 1 рабочий VPN");
-        btnPool.setText(busy ? "Сбор пула: остановить"
+        // ВАЖНО: кнопки остаются активными. Пока идёт работа, они и есть «Остановить».
+        // Раньше здесь стояло setEnabled(!busy) — из-за этого остановить поиск было нельзя.
+        btnQuick.setEnabled(true);
+        btnPool.setEnabled(true);
+        btnQuick.setText(busy ? "■ Остановить поиск" : "Быстрый поиск: найти 1 рабочий VPN");
+        btnPool.setText(busy ? "■ Остановить сбор пула"
                 : "Собрать пул: обновить все списки + замерить скорость");
+        btnQuick.setTextColor(busy ? RED : TEXT);
+        btnPool.setTextColor(busy ? RED : TEXT);
         if (!busy) refreshPoolCard();
     }
 

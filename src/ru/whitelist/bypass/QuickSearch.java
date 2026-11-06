@@ -89,7 +89,8 @@ public final class QuickSearch {
         List<ProxyConfig> queue = new ArrayList<>();
         addAll(queue, seen, ConfigRepository.downloaded(c));
         addAll(queue, seen, ConfigRepository.embedded(c));
-        log.line("Кандидатов в хранилище: " + queue.size());
+        log.line("Сначала перебираю локальный список: " + queue.size()
+                + " конфигов (источники — только когда он кончится)");
 
         List<String> sources = Prefs.sources(c);
         List<String> pending = new ArrayList<>(sources);
@@ -239,13 +240,24 @@ public final class QuickSearch {
 
     /** Скачать источник и добавить новое. -1 — источник не отдался. */
     private static int pullSource(Context c, String src, boolean viaTor, Log log) {
+        long t0 = System.currentTimeMillis();
         try {
             List<String> lines = ConfigRepository.fetchSource(src, viaTor);
             int added = ConfigRepository.appendNew(c, lines);
+            log.line("  " + lines.size() + " строк за "
+                    + Math.max(1, (System.currentTimeMillis() - t0) / 1000) + " с → +" + added
+                    + " новых");
             return added;
+        } catch (ConfigRepository.SourceError e) {
+            if (e.missing) {
+                // репозиторий удалён/переименован: это не сетевой сбой, Tor не поможет
+                log.line("  пропускаю " + ConfigRepository.shortSource(src) + ": " + e.getMessage());
+                return 0;
+            }
+            log.line("  не ответил: " + ConfigRepository.shortSource(src) + " (" + e.getMessage() + ")");
+            return -1;
         } catch (Exception e) {
-            log.line("  не ответил: " + ConfigRepository.shortSource(src)
-                    + " (" + e.getMessage() + ")");
+            log.line("  не ответил: " + ConfigRepository.shortSource(src) + " (" + e.getMessage() + ")");
             return -1;
         }
     }
