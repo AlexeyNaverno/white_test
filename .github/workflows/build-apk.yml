@@ -51,14 +51,16 @@ jobs:
           set -o pipefail
           ABIS="armeabi-v7a arm64-v8a" bash build.sh "$ANDROID_SDK" "$GITHUB_WORKSPACE/deps" 2>&1 | tee /tmp/build.log
 
-      - name: Отладка (хвост лога в комментарий PR)
+      - name: Отладка (лог сборки в отдельную ветку)
         if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          tail -c 6000 /tmp/build.log > /tmp/tail.txt || true
-          python3 -c "import json;b=open('/tmp/tail.txt',encoding='utf-8',errors='replace').read();print(json.dumps({'body':'```\n'+b+'\n```'}))" > /tmp/body.json
-          gh api "repos/${{ github.repository }}/issues/5/comments" --input /tmp/body.json || true
+          tail -c 20000 /tmp/build.log > /tmp/tail.txt || true
+          git config user.name "ci"; git config user.email "ci@localhost"
+          mkdir -p ci-log && cp /tmp/tail.txt ci-log/build.log
+          git checkout -b "ci-log-${{ github.run_id }}"
+          git add ci-log/build.log
+          git commit -m "ci log ${{ github.run_id }}"
+          git push origin "HEAD:ci-log-${{ github.run_id }}"
 
       - name: Проверка артефакта (жёсткие ассерты)
         run: |
