@@ -4,14 +4,17 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ContentValues;
 import android.content.Context;
-import android.graphics.Color;
+import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.Menu;
+import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
@@ -24,6 +27,7 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -37,16 +41,17 @@ import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.URL;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
  * Встроенный браузер (экспериментальная функция): одна вкладка, поиск по умолчанию —
- * DuckDuckGo, кнопки «Скачать страницу», «через Tor», «Мосты» и «Выйти».
+ * DuckDuckGo. Всё управление — сверху: адресная строка, кнопка перехода и меню «⋮»,
+ * в котором лежат «через Tor», «Скачать страницу», «Мосты» и «Выйти». Снизу остаётся
+ * только строка состояния, поэтому ни страница, ни кнопки не залезают под камеру и
+ * системную навигацию.
  *
- * Смысл: посмотреть, что реально доступно, не поднимая VPN на всё устройство, и проверить
- * резервный путь через Tor. Страница сохраняется как MHTML — один файл, внутри и разметка,
- * и картинки: это делает сам WebView (saveWebArchive), поэтому лишнего кода нет.
+ * Страница сохраняется как MHTML — один файл, внутри и разметка, и картинки: это делает
+ * сам WebView (saveWebArchive), поэтому лишнего кода нет.
  */
 public class BrowserActivity extends Activity {
 
@@ -57,10 +62,14 @@ public class BrowserActivity extends Activity {
     private static final String HOME = "https://duckduckgo.com/";
     private static final String SEARCH = "https://duckduckgo.com/?q=";
 
+    private static final int MENU_TOR = 1;
+    private static final int MENU_SAVE = 2;
+    private static final int MENU_BRIDGES = 3;
+    private static final int MENU_EXIT = 4;
+
     private WebView web;
     private EditText urlBar;
     private TextView status;
-    private Button torButton;
 
     private boolean torOn;
     private volatile boolean torBusy;
@@ -76,11 +85,12 @@ public class BrowserActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(BG);
+        root.setPadding(0, dp(2), 0, dp(2));
 
-        // --- адресная строка: и переход по ссылке, и поиск
+        // --- верхняя панель: адрес, переход, меню «⋮»
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
-        top.setPadding(dp(8), dp(8), dp(8), dp(4));
+        top.setPadding(dp(8), dp(6), dp(8), dp(4));
         top.setGravity(Gravity.CENTER_VERTICAL);
 
         urlBar = new EditText(this);
@@ -88,9 +98,11 @@ public class BrowserActivity extends Activity {
         urlBar.setTextColor(TEXT);
         urlBar.setHintTextColor(TEXT_DIM);
         urlBar.setHint("адрес или поиск (DuckDuckGo)");
-        urlBar.setTextSize(14);
+        urlBar.setTextSize(13);
         urlBar.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
         urlBar.setImeOptions(EditorInfo.IME_ACTION_GO);
+        urlBar.setHorizontallyScrolling(false);
+        urlBar.setEllipsize(TextUtils.TruncateAt.MIDDLE);
         urlBar.setOnEditorActionListener(new TextView.OnEditorActionListener() {
             @Override public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
                 if (actionId == EditorInfo.IME_ACTION_GO
@@ -114,6 +126,12 @@ public class BrowserActivity extends Activity {
             }
         });
         top.addView(goButton);
+
+        Button menuButton = smallButton("⋮", TEXT);
+        menuButton.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { showMenu(v); }
+        });
+        top.addView(menuButton);
         root.addView(top);
 
         // --- сама страница
@@ -125,7 +143,7 @@ public class BrowserActivity extends Activity {
         ws.setUseWideViewPort(true);
         ws.setBuiltInZoomControls(false);
         ws.setSupportMultipleWindows(false);
-        ws.setUserAgentString(ws.getUserAgentString() + " WhitelistBypass/0.0.7");
+        ws.setUserAgentString(ws.getUserAgentString() + " WhitelistBypass/0.0.8");
         web.setWebViewClient(new WebViewClient() {
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 if (url != null) urlBar.setText(url);
@@ -149,58 +167,52 @@ public class BrowserActivity extends Activity {
         root.addView(web, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // --- нижняя панель
+        // --- строка состояния (единственный элемент снизу)
         status = new TextView(this);
         status.setTextColor(TEXT_DIM);
         status.setTextSize(11);
-        status.setPadding(dp(10), dp(4), dp(10), dp(2));
+        status.setMaxLines(2);
+        status.setEllipsize(TextUtils.TruncateAt.END);
+        status.setPadding(dp(10), dp(3), dp(10), dp(3));
         root.addView(status);
 
-        LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setPadding(dp(6), dp(2), dp(6), dp(8));
-
-        Button savePage = smallButton("Скачать страницу", TEXT);
-        savePage.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { saveCurrentPage(); }
-        });
-        bar.addView(savePage, rowParams());
-
-        torButton = smallButton("через Tor: выкл", TEXT);
-        torButton.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { toggleTor(); }
-        });
-        bar.addView(torButton, rowParams());
-
-        Button bridges = smallButton("Мосты", TEXT);
-        bridges.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                // настройки Tor — там же, где мосты и их проверка
-                startActivity(new android.content.Intent(BrowserActivity.this, SettingsActivity.class));
-            }
-        });
-        bar.addView(bridges, rowParams());
-
-        Button exit = smallButton("Выйти", 0xFFFF8A80);
-        exit.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { finish(); }
-        });
-        bar.addView(exit, rowParams());
-        root.addView(bar);
-
         setContentView(root);
+        Ui.applyInsets(root);
 
         torOn = Prefs.browserTor(this);
-        updateTorButton();
+        updateStatus();
         if (torOn) enableTor();
         web.loadUrl(HOME);
     }
 
-    private LinearLayout.LayoutParams rowParams() {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        p.setMargins(dp(2), 0, dp(2), 0);
-        return p;
+    /** Меню «⋮»: сюда убраны все кнопки, чтобы страница занимала весь экран. */
+    private void showMenu(View anchor) {
+        PopupMenu menu = new PopupMenu(this, anchor);
+        menu.getMenu().add(Menu.NONE, MENU_TOR, 1, torOn ? "Tor: включён (через мосты)" : "Tor: выключен");
+        menu.getMenu().add(Menu.NONE, MENU_SAVE, 2, "Скачать страницу");
+        menu.getMenu().add(Menu.NONE, MENU_BRIDGES, 3, "Мосты (настройки Tor)");
+        menu.getMenu().add(Menu.NONE, MENU_EXIT, 4, "Выйти в настройки");
+        menu.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
+            @Override public boolean onMenuItemClick(MenuItem item) {
+                switch (item.getItemId()) {
+                    case MENU_TOR:
+                        toggleTor();
+                        return true;
+                    case MENU_SAVE:
+                        saveCurrentPage();
+                        return true;
+                    case MENU_BRIDGES:
+                        startActivity(new Intent(BrowserActivity.this, SettingsActivity.class));
+                        return true;
+                    case MENU_EXIT:
+                        finish();
+                        return true;
+                    default:
+                        return false;
+                }
+            }
+        });
+        menu.show();
     }
 
     /** Адрес прямо или поиск в DuckDuckGo, если это не похоже на адрес. */
@@ -222,27 +234,30 @@ public class BrowserActivity extends Activity {
 
     private void toggleTor() {
         if (torBusy) return;
+        if (!torOn && TorEngine.candidateBridges(this).isEmpty()) {
+            status.setText("Мостов нет — добавьте их в настройках Tor");
+            toast("Без мостов Tor не включается: добавьте мосты в настройках");
+            return;
+        }
         torOn = !torOn;
         Prefs.get(this).edit().putBoolean(Prefs.BROWSER_TOR, torOn).apply();
-        updateTorButton();
+        updateStatus();
         if (torOn) enableTor();
         else disableTor();
     }
 
-    private void updateTorButton() {
-        if (torButton == null) return;
-        torButton.setText(torOn ? "через Tor: вкл" : "через Tor: выкл");
-        torButton.setTextColor(torOn ? ACCENT : TEXT);
+    private void updateStatus() {
+        if (status == null) return;
+        status.setText(torOn ? "Tor включён — страницы идут через мосты" : "Tor выключен — страницы напрямую");
+        status.setTextColor(torOn ? ACCENT : TEXT_DIM);
     }
 
     private void enableTor() {
         if (torBusy) return;
         torBusy = true;
-        status.setText("Поднимаю Tor… (мосты: Настройки → Tor)");
+        status.setText("Поднимаю Tor с мостами… (Настройки → Tor)");
         new Thread(new Runnable() {
             @Override public void run() {
-                // Tor мог уже работать для скачивания списков — тогда перезапускаем:
-                // нужен HTTP-туннель, а не только SOCKS.
                 final boolean ok = TorEngine.restart(BrowserActivity.this, 120_000);
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
@@ -252,10 +267,11 @@ public class BrowserActivity extends Activity {
                             torOn = false;
                             Prefs.get(BrowserActivity.this).edit()
                                     .putBoolean(Prefs.BROWSER_TOR, false).apply();
-                            updateTorButton();
+                            updateStatus();
                             return;
                         }
                         status.setText("Tor работает — страницы идут через мост");
+                        status.setTextColor(ACCENT);
                         web.reload();
                     }
                 });
@@ -265,7 +281,7 @@ public class BrowserActivity extends Activity {
 
     private void disableTor() {
         TorEngine.stop(this);
-        status.setText("Tor выключен — страницы идут напрямую");
+        updateStatus();
         web.reload();
     }
 
@@ -289,7 +305,7 @@ public class BrowserActivity extends Activity {
             conn.setReadTimeout(30000);
             conn.setInstanceFollowRedirects(false);
             conn.setRequestProperty("User-Agent",
-                    "Mozilla/5.0 (Linux; Android) WhitelistBypass/0.0.7");
+                    "Mozilla/5.0 (Linux; Android) WhitelistBypass/0.0.8");
             conn.setRequestProperty("Accept", "*/*");
             int code = conn.getResponseCode();
             Map<String, String> headers = new HashMap<>();
@@ -297,11 +313,10 @@ public class BrowserActivity extends Activity {
             if (type != null) headers.put("Content-Type", type);
             String location = conn.getHeaderField("Location");
             if (location != null) headers.put("Location", location);
-            String contentType = conn.getContentType();
             String mime = "text/html";
             String charset = "utf-8";
-            if (contentType != null) {
-                String[] parts = contentType.split(";");
+            if (type != null) {
+                String[] parts = type.split(";");
                 if (parts[0].trim().length() > 0) mime = parts[0].trim();
                 for (String part : parts) {
                     String t = part.trim();
@@ -377,7 +392,7 @@ public class BrowserActivity extends Activity {
                 if (uri != null) {
                     try (OutputStream out = getContentResolver().openOutputStream(uri)) {
                         if (out != null) {
-                            java.io.InputStream in = new java.io.FileInputStream(src);
+                            InputStream in = new java.io.FileInputStream(src);
                             byte[] buf = new byte[16384];
                             int n;
                             while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
@@ -397,12 +412,13 @@ public class BrowserActivity extends Activity {
     private Button smallButton(String text, int color) {
         Button b = new Button(this);
         b.setText(text);
-        b.setTextSize(12);
+        b.setTextSize(14);
         b.setAllCaps(false);
         b.setTextColor(color);
         b.setBackgroundColor(0xFF16202B);
-        b.setPadding(dp(8), dp(6), dp(8), dp(6));
+        b.setPadding(dp(8), dp(4), dp(8), dp(4));
         b.setMinHeight(dp(34));
+        b.setMinimumWidth(dp(40));
         return b;
     }
 

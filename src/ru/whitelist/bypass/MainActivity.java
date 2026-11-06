@@ -100,6 +100,7 @@ public class MainActivity extends Activity {
         scroll.addView(root, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         setContentView(scroll);
+        Ui.applyInsets(scroll);
         if (previousCrash != null) showCrashDialog(previousCrash);
 
         // шапка

@@ -43,6 +43,13 @@ public final class TorEngine {
     private static final String EXTRA_SERVICE_PACKAGE_NAME =
             "org.torproject.android.intent.extra.SERVICE_PACKAGE_NAME";
 
+    /** Последняя причина, по которой Tor не поднялся (для логов и интерфейса). */
+    private static volatile String lastError = "";
+
+    public static String lastError() {
+        return lastError;
+    }
+
     private static File torServiceDir(Context ctx) {
         return ctx.getDir("TorService", Context.MODE_PRIVATE);
     }
@@ -62,12 +69,13 @@ public final class TorEngine {
         sb.append("HTTPTunnelPort ").append(HTTP_TUNNEL_PORT).append('\n');
         sb.append("ClientOnly 1\n");
         sb.append("AvoidDiskWrites 1\n");
+        // Мосты включены всегда: без них Tor — это просто «ещё один медленный интернет»,
+        // а для этого есть обычный браузер. Нет мостов — резервный канал не поднимаем.
         if (bridges == null || bridges.isEmpty()) {
-            sb.append("UseBridges 0\n");
-        } else {
-            sb.append("UseBridges 1\n");
-            for (String b : bridges) sb.append("Bridge ").append(b).append('\n');
+            throw new IOException("нет мостов: добавьте их в настройках Tor");
         }
+        sb.append("UseBridges 1\n");
+        for (String b : bridges) sb.append("Bridge ").append(b).append('\n');
         String extra = Prefs.torExtraTorrc(ctx);
         if (extra != null && !extra.trim().isEmpty()) sb.append(extra.trim()).append('\n');
         try (OutputStream out = new FileOutputStream(new File(dir, "torrc"))) {
@@ -152,9 +160,12 @@ public final class TorEngine {
         try {
             writeTorrc(ctx, bridges);
         } catch (IOException e) {
+            lastError = e.getMessage();
             return false;
         }
-        return startServiceAndWait(ctx, timeoutMs);
+        boolean ok = startServiceAndWait(ctx, timeoutMs);
+        if (!ok) lastError = "мост не поднялся за " + (timeoutMs / 1000) + " с";
+        return ok;
     }
 
     /** Перезапуск Tor: дождаться, пока старый процесс отпустит порт, и поднять заново. */
@@ -199,9 +210,12 @@ public final class TorEngine {
         try {
             writeTorrc(ctx);
         } catch (IOException e) {
+            lastError = e.getMessage();
             return false;
         }
-        return startServiceAndWait(ctx, timeoutMs);
+        boolean ok = startServiceAndWait(ctx, timeoutMs);
+        if (!ok) lastError = "Tor не поднялся с мостами за " + (timeoutMs / 1000) + " с";
+        return ok;
     }
 
     private static boolean startServiceAndWait(Context ctx, long timeoutMs) {
