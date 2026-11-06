@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     tags: ['v*']
+    branches: ['arena/**']   # ВРЕМЕННО: отладка сборки
 
 permissions:
   contents: write
@@ -45,7 +46,19 @@ jobs:
           echo "Версия: $V"
 
       - name: Сборка APK
-        run: ABIS="armeabi-v7a arm64-v8a" bash build.sh "$ANDROID_SDK" "$GITHUB_WORKSPACE/deps"
+        run: |
+          set -o pipefail
+          ABIS="armeabi-v7a arm64-v8a" bash build.sh "$ANDROID_SDK" "$GITHUB_WORKSPACE/deps" 2>&1 | tee /tmp/build.log
+
+      - name: Отладка (хвост лога в комментарий PR)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tail -c 4000 /tmp/build.log > /tmp/tail.txt || echo "нет лога" > /tmp/tail.txt
+          printf '```\n%s\n```\n' "$(cat /tmp/tail.txt)" > /tmp/body.txt
+          gh api "repos/${{ github.repository }}/issues/5/comments" -F body=@/tmp/body.txt > /dev/null || \
+            gh pr comment 5 --body-file /tmp/body.txt || true
 
       - name: Проверка артефакта (жёсткие ассерты)
         run: |
