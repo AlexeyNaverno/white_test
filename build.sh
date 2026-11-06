@@ -14,13 +14,8 @@ cd "$(dirname "$0")"
 APP_NAME="WhitelistBypass"
 MIN_SDK=24          # tor-android AAR имеет minSdk 24
 ABIS="${ABIS:-armeabi-v7a arm64-v8a}"
-TAINT="${TAINT:-4}"   # этап тест-сборки: 1=только UI, 2=+DPI, 3=+VPN(Xray), 4=полная
 BUILD_DIR=build
-case "$TAINT" in
-  1|2|3|4) ;;
-  *) echo "[ERROR] TAINT должен быть 1..4 (получено: $TAINT)"; exit 1 ;;
-esac
-if [ "$TAINT" = "4" ]; then OUT_APK="${APP_NAME}.apk"; else OUT_APK="${APP_NAME}-TEST${TAINT}.apk"; fi
+OUT_APK="${APP_NAME}.apk"
 
 SDK="${1:-${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}}"
 if [ -z "$SDK" ]; then
@@ -87,15 +82,6 @@ for aar, name in jobs:
 print("AAR unpack done")
 PY
 
-# --- [0/7] TAINT: отфильтрованный манифест ---
-LINK_MANIFEST="AndroidManifest.xml"
-if [ "$TAINT" != "4" ]; then
-  echo "[0/7] test stage $TAINT - filtering manifest"
-  python3 tools/taint_manifest.py "$TAINT" < AndroidManifest.xml > "$BUILD_DIR/AndroidManifest.test.xml" \
-      || { echo "[ERROR] taint_manifest.py"; exit 1; }
-  LINK_MANIFEST="$BUILD_DIR/AndroidManifest.test.xml"
-fi
-
 # --- [1/7] aapt2 compile ---
 echo "[1/7] aapt2 compile"
 "$AAPT2" compile --dir res -o "$BUILD_DIR/compiled_res"
@@ -107,7 +93,7 @@ echo "  packing .flat -> resources.zip"
 
 # --- [2/7] aapt2 link ---
 echo "[2/7] aapt2 link"
-"$AAPT2" link -o "$BUILD_DIR/base.apk" -I "$ANDROID_JAR" --manifest "$LINK_MANIFEST" \
+"$AAPT2" link -o "$BUILD_DIR/base.apk" -I "$ANDROID_JAR" --manifest "AndroidManifest.xml" \
   --java "$BUILD_DIR" -A assets --min-sdk-version $MIN_SDK --target-sdk-version "$TARGET_SDK" \
   "$BUILD_DIR/compiled_res/resources.zip"
 
@@ -116,15 +102,7 @@ echo "  R.java: $R_JAVA"
 
 # --- [3/7] javac ---
 echo "[3/7] javac"
-if [ "$TAINT" = "4" ]; then
-  JAVA_FILES=$(find src -name '*.java')
-else
-  JAVA_FILES=$(find src -name '*.java' ! -path '*/ru/whitelist/bypass/TestFlags.java')
-  mkdir -p "$BUILD_DIR/gen"
-  sed -E "s/LEVEL = [0-9]+;/LEVEL = $TAINT;/" src/ru/whitelist/bypass/TestFlags.java > "$BUILD_DIR/gen/TestFlags.java"
-  grep -n "LEVEL" "$BUILD_DIR/gen/TestFlags.java" | head -2
-  JAVA_FILES="$JAVA_FILES $BUILD_DIR/gen/TestFlags.java"
-fi
+JAVA_FILES=$(find src -name '*.java')
 CLASSPATH="$BUILD_DIR/deps-classes/xray:$BUILD_DIR/deps-classes/tor:$BUILD_DIR/deps-classes/lbc:$DEPS/jtorctl-0.4.5.7.jar:$DEPS/kotlin-stdlib-2.2.10.jar"
 javac -encoding UTF-8 --release 8 -nowarn -classpath "$ANDROID_JAR:$CLASSPATH" \
   -d "$BUILD_DIR/classes" $JAVA_FILES "$R_JAVA"
@@ -146,25 +124,13 @@ jar uf "$BUILD_DIR/unaligned.apk" -C "$BUILD_DIR/dex" classes.dex
 
 STAGING="$BUILD_DIR/apk-libs"
 mkdir -p "$STAGING"
-if [ "$TAINT" != "1" ]; then
-  for ABI in $ABIS; do
-    mkdir -p "$STAGING/lib/$ABI"
-    cp "jniLibs/$ABI/"*.so "$STAGING/lib/$ABI/"
-    if [ "$TAINT" -ge 3 ]; then
-      cp "$BUILD_DIR/deps-aar/xray/jni/$ABI/libgojni.so" "$STAGING/lib/$ABI/" 2>/dev/null || echo "  [warn] net libgojni.so dlya $ABI"
-    else
-      echo "  [taint] libgojni.so skipped (stage 2 = DPI only)"
-    fi
-    if [ "$TAINT" = "4" ]; then
-      cp "$BUILD_DIR/deps-aar/tor/jni/$ABI/libtor.so"    "$STAGING/lib/$ABI/" 2>/dev/null || echo "  [warn] net libtor.so dlya $ABI"
-    else
-      echo "  [taint] libtor.so skipped (stage $TAINT)"
-    fi
-  done
-  jar uf "$BUILD_DIR/unaligned.apk" -C "$STAGING" lib
-else
-  echo "  [taint] stage 1 - native libraries NOT added"
-fi
+for ABI in $ABIS; do
+  mkdir -p "$STAGING/lib/$ABI"
+  cp "jniLibs/$ABI/"*.so "$STAGING/lib/$ABI/"
+  cp "$BUILD_DIR/deps-aar/xray/jni/$ABI/libgojni.so" "$STAGING/lib/$ABI/" 2>/dev/null || echo "  [warn] net libgojni.so dlya $ABI"
+  cp "$BUILD_DIR/deps-aar/tor/jni/$ABI/libtor.so"    "$STAGING/lib/$ABI/" 2>/dev/null || echo "  [warn] net libtor.so dlya $ABI"
+done
+jar uf "$BUILD_DIR/unaligned.apk" -C "$STAGING" lib
 
 # --- [6/7] zipalign ---
 echo "[6/7] zipalign"

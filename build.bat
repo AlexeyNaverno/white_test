@@ -6,29 +6,17 @@ REM  WhitelistBypass - build APK without Gradle
 REM  Works like SlideDungeon build.bat
 REM  SDK: C:\SDK  (build-tools 36.0.0)
 REM  Override ABIS:   set ABIS=arm64-v8a armeabi-v7a x86_64 x86
-REM  Test stages:     set TAINT=1  (1=UI only, 2=+DPI, 3=+VPN/Xray, 4=full/default)
 REM  No Cyrillic anywhere in this file by design (cmd parses .bat in OEM codepage).
 REM ============================================
-
-if not defined TAINT set TAINT=4
-if "%TAINT%"=="1" goto taint_ok
-if "%TAINT%"=="2" goto taint_ok
-if "%TAINT%"=="3" goto taint_ok
-if "%TAINT%"=="4" goto taint_ok
-echo [ERROR] TAINT must be 1..4 (got %TAINT%)
-exit /b 1
-:taint_ok
 
 set SDK=C:\SDK
 set BUILD_TOOLS=%SDK%\build-tools\36.0.0
 set APP_NAME=WhitelistBypass
 set BUILD_DIR=build
-if "%TAINT%"=="4" (set OUT_APK=%APP_NAME%.apk) else (set OUT_APK=%APP_NAME%-TEST%TAINT%.apk)
+set OUT_APK=%APP_NAME%.apk
 set MIN_SDK=24
 if "%ABIS%"=="" set ABIS=armeabi-v7a arm64-v8a
 set DEPS=deps
-
-echo TAINT=%TAINT% (4=full build; 1..3=test stage)
 
 REM --- Auto-detect Android platform ---
 set PLATFORM_DIR=
@@ -97,19 +85,7 @@ for %%J in ("%DEPS%\libv2ray.aar|xray" "%DEPS%\tor-android.aar|tor" "%DEPS%\loca
     )
 )
 
-REM --- [0/7] TAINT: filtered manifest + source overlay ---
-set LINK_MANIFEST=AndroidManifest.xml
-if "%TAINT%"=="4" goto manifest_done
-echo [0/7] test stage %TAINT% - filtering manifest and TestFlags
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\taint_manifest.ps1 -Level %TAINT% -In AndroidManifest.xml -Out %BUILD_DIR%\AndroidManifest.test.xml || (echo [ERROR] taint_manifest.ps1 failed & exit /b 1)
-set LINK_MANIFEST=%BUILD_DIR%\AndroidManifest.test.xml
-xcopy /E /I /Q /H src %BUILD_DIR%\src-taint >nul
-powershell -NoProfile -Command "(Get-Content '%BUILD_DIR%\src-taint\ru\whitelist\bypass\TestFlags.java' -Raw) -replace 'LEVEL = \d+;', 'LEVEL = %TAINT%;' | Set-Content '%BUILD_DIR%\src-taint\ru\whitelist\bypass\TestFlags.java' -Encoding UTF8"
-set SRC_DIR=%BUILD_DIR%\src-taint
-goto manifest_ok
-:manifest_done
 set SRC_DIR=src
-:manifest_ok
 
 echo [1/7] aapt2 compile
 "%AAPT2%" compile --dir res -o %BUILD_DIR%\compiled_res
@@ -123,7 +99,7 @@ if errorlevel 1 (popd & echo [ERROR] failed to pack resources.zip & exit /b 1)
 popd
 
 echo [2/7] aapt2 link
-"%AAPT2%" link -o %BUILD_DIR%\base.apk -I "%ANDROID_JAR%" --manifest "%LINK_MANIFEST%" --java %BUILD_DIR% -A assets --min-sdk-version %MIN_SDK% --target-sdk-version %TARGET_SDK% %BUILD_DIR%\compiled_res\resources.zip
+"%AAPT2%" link -o %BUILD_DIR%\base.apk -I "%ANDROID_JAR%" --manifest "AndroidManifest.xml" --java %BUILD_DIR% -A assets --min-sdk-version %MIN_SDK% --target-sdk-version %TARGET_SDK% %BUILD_DIR%\compiled_res\resources.zip
 if errorlevel 1 (echo [ERROR] aapt2 link failed & exit /b 1)
 if not exist %BUILD_DIR%\base.apk (echo [ERROR] aapt2 link produced no base.apk & exit /b 1)
 
@@ -161,21 +137,14 @@ copy /y %BUILD_DIR%\base.apk %BUILD_DIR%\unaligned.apk >nul
 jar uf %BUILD_DIR%\unaligned.apk -C %BUILD_DIR%\dex classes.dex
 if errorlevel 1 (echo [ERROR] jar uf failed & exit /b 1)
 
-if "%TAINT%"=="1" goto libs_done
 for %%A in (%ABIS%) do (
     mkdir %BUILD_DIR%\apk-libs\lib\%%A 2>nul
     copy /y jniLibs\%%A\*.so %BUILD_DIR%\apk-libs\lib\%%A\
-    if "%TAINT%"=="4" (
-        if exist "%BUILD_DIR%\deps-aar\xray\jni\%%A\libgojni.so" copy /y "%BUILD_DIR%\deps-aar\xray\jni\%%A\libgojni.so" %BUILD_DIR%\apk-libs\lib\%%A\
-        if exist "%BUILD_DIR%\deps-aar\tor\jni\%%A\libtor.so"    copy /y "%BUILD_DIR%\deps-aar\tor\jni\%%A\libtor.so"    %BUILD_DIR%\apk-libs\lib\%%A\
-    ) else (
-        if "%TAINT%"=="3" if exist "%BUILD_DIR%\deps-aar\xray\jni\%%A\libgojni.so" copy /y "%BUILD_DIR%\deps-aar\xray\jni\%%A\libgojni.so" %BUILD_DIR%\apk-libs\lib\%%A\
-        echo   [taint] libgojni/libtor per stage rules (stage 2: DPI only, stage 3: no Tor)
-    )
+    if exist "%BUILD_DIR%\deps-aar\xray\jni\%%A\libgojni.so" copy /y "%BUILD_DIR%\deps-aar\xray\jni\%%A\libgojni.so" %BUILD_DIR%\apk-libs\lib\%%A\
+    if exist "%BUILD_DIR%\deps-aar\tor\jni\%%A\libtor.so"    copy /y "%BUILD_DIR%\deps-aar\tor\jni\%%A\libtor.so"    %BUILD_DIR%\apk-libs\lib\%%A\
 )
 jar uf %BUILD_DIR%\unaligned.apk -C %BUILD_DIR%\apk-libs lib
 if errorlevel 1 (echo [ERROR] jar uf libs failed & exit /b 1)
-:libs_done
 
 echo [6/7] zipalign
 "%ZIPALIGN%" -p -f 4 %BUILD_DIR%\unaligned.apk %BUILD_DIR%\aligned.apk
@@ -192,7 +161,7 @@ if errorlevel 1 (echo [ERROR] apksigner failed & exit /b 1)
 
 echo.
 echo ============================================
-echo  DONE: %OUT_APK%  (stage %TAINT%)
+echo  DONE: %OUT_APK%
 echo  Install: adb install -r %OUT_APK%
 echo ============================================
 endlocal
