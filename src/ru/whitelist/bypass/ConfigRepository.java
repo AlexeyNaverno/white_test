@@ -37,6 +37,14 @@ public final class ConfigRepository {
 
     private static final String FILE = "configs.txt";
     private static final int MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024;
+    /** Сколько ждём соединения с источником. */
+    private static final int CONNECT_TIMEOUT_MS = 8000;
+    /** Сколько ждём очередную порцию данных: дольше — считаем, что источник «завис». */
+    private static final int READ_TIMEOUT_MS = 10000;
+    /** Потолок времени на один источник (медленный файл не должен блокировать остальные). */
+    private static final int SOURCE_BUDGET_MS = 20000;
+    /** Потолок времени на обновление всех источников: дальше работаем с тем, что есть. */
+    private static final int TOTAL_BUDGET_MS = 90000;
     /** Потолок хранилища: больше 2 000 строк телефону не нужно. */
     private static final int MAX_LINES = 2000;
 
@@ -60,17 +68,40 @@ public final class ConfigRepository {
     public static final class UpdateResult {
         public int sourcesTried;
         public int sourcesOk;
+        /** Источники, которых больше нет (HTTP 404/410/451): ни зеркало, ни Tor не помогут. */
+        public int sourcesMissing;
         public int parsed;
         public int skipped;
         public int stored;
+        public long bytes;
+        public long elapsedMs;
+        public boolean timedOut;
         public boolean viaTor;
         public final List<String> messages = new ArrayList<>();
 
         @Override public String toString() {
-            return "источников OK " + sourcesOk + "/" + sourcesTried
-                    + ", конфигов " + parsed
-                    + (viaTor ? " (через Tor)" : "")
-                    + ", в хранилище " + stored;
+            StringBuilder sb = new StringBuilder();
+            sb.append("источников OK ").append(sourcesOk).append('/').append(sourcesTried);
+            if (sourcesMissing > 0) sb.append(", недоступно ").append(sourcesMissing);
+            sb.append(", конфигов ").append(parsed);
+            if (viaTor) sb.append(" (через Tor)");
+            sb.append(", в хранилище ").append(stored);
+            if (bytes > 0) sb.append(", скачано ").append(bytes / 1024).append(" КБ за ")
+                    .append(Math.max(1, elapsedMs / 1000)).append(" с");
+            if (timedOut) sb.append(" — упёрлись в лимит времени");
+            return sb.toString();
+        }
+    }
+
+    /** Ошибка источника: HTTP-код (0 — сеть/таймаут) и признак «источника больше нет». */
+    public static final class SourceError extends IOException {
+        public final int httpCode;
+        public final boolean missing;
+
+        SourceError(String message, int httpCode) {
+            super(message);
+            this.httpCode = httpCode;
+            this.missing = httpCode == 404 || httpCode == 410 || httpCode == 451;
         }
     }
 
@@ -212,38 +243,61 @@ public final class ConfigRepository {
             return res;
         }
         Map<String, String> unique = new LinkedHashMap<>();
+        List<String> retryViaTor = new ArrayList<>();
+        long started = System.currentTimeMillis();
         for (String src : sources) {
             if (isCancelled()) break;
+            if (System.currentTimeMillis() - started > TOTAL_BUDGET_MS) {
+                res.messages.add("Лимит загрузки " + (TOTAL_BUDGET_MS / 1000)
+                        + " с исчерпан — остальные источники пропускаю");
+                res.timedOut = true;
+                break;
+            }
             res.sourcesTried++;
             if (progress != null) progress.onMessage("Скачиваю: " + shortSource(src));
-            List<String> lines;
+            long[] bytes = new long[1];
+            long t0 = System.currentTimeMillis();
             try {
-                lines = fetch(src, null);
+                List<String> lines = fetch(src, null, bytes);
+                res.sourcesOk++;
+                res.bytes += bytes[0];
+                int added = collect(unique, lines, res);
+                if (progress != null) {
+                    progress.onMessage(shortSource(src) + ": +" + added
+                            + " (всего " + unique.size() + "), " + (bytes[0] / 1024) + " КБ за "
+                            + Math.max(1, (System.currentTimeMillis() - t0) / 1000) + " с");
+                }
+            } catch (SourceError e) {
+                if (e.missing) {
+                    res.sourcesMissing++;
+                    res.messages.add("Пропускаю " + shortSource(src) + ": " + e.getMessage());
+                    continue;   // репозитория нет — ни зеркало, ни Tor не помогут
+                }
+                res.messages.add("Не ответил " + shortSource(src) + ": " + e.getMessage());
+                retryViaTor.add(src);
             } catch (Exception e) {
-                res.messages.add("Не ответил: " + shortSource(src) + " (" + e.getMessage() + ")");
-                continue;
-            }
-            res.sourcesOk++;
-            int added = collect(unique, lines, res);
-            if (progress != null) {
-                progress.onMessage(shortSource(src) + ": +" + added + " (всего " + unique.size() + ")");
+                res.messages.add("Не ответил " + shortSource(src) + ": " + e.getMessage());
+                retryViaTor.add(src);
             }
             if (unique.size() >= MAX_LINES) break;
         }
+        res.elapsedMs = System.currentTimeMillis() - started;
 
         // Прямой путь не дал ничего → Tor как канал для скачивания списков.
-        if (unique.isEmpty() && !isCancelled()) {
+        if (unique.isEmpty() && !isCancelled() && !retryViaTor.isEmpty()) {
             if (progress != null) progress.onMessage("Прямые источники недоступны — поднимаю Tor…");
             res.viaTor = true;
             if (!TorEngine.ensureStarted(c, 150_000)) {
                 res.messages.add("Tor не поднялся — списки не обновлены");
             } else {
                 try {
-                    for (String src : sources) {
+                    for (String src : retryViaTor) {
                         if (isCancelled()) break;
                         try {
-                            List<String> lines = fetch(src, torProxy());
+                            long[] bytes = new long[1];
+                            List<String> lines = fetch(src, torProxy(), bytes);
                             res.sourcesOk++;
+                            res.bytes += bytes[0];
                             collect(unique, lines, res);
                         } catch (Exception e) {
                             res.messages.add("Через Tor не ответил: " + shortSource(src));
@@ -301,10 +355,21 @@ public final class ConfigRepository {
 
     /** Скачать список строк. Сначала напрямую, потом через jsDelivr-зеркало. */
     private static List<String> fetch(String urlStr, Proxy proxy) throws IOException {
+        return fetch(urlStr, proxy, null);
+    }
+
+    /**
+     * То же, но с учётом байтов и «умным» пропуском:
+     * если репозитория больше нет (404/410) — зеркало не пробуем, это только трата времени.
+     */
+    private static List<String> fetch(String urlStr, Proxy proxy, long[] bytesOut) throws IOException {
         IOException last = null;
         for (String candidate : candidates(urlStr)) {
             try {
-                return doFetch(candidate, proxy);
+                return doFetch(candidate, proxy, bytesOut);
+            } catch (SourceError e) {
+                if (e.missing) throw e;
+                last = e;
             } catch (IOException e) {
                 last = e;
             }
@@ -346,27 +411,59 @@ public final class ConfigRepository {
         return out;
     }
 
-    private static List<String> doFetch(String urlStr, Proxy proxy) throws IOException {
+    private static List<String> doFetch(String urlStr, Proxy proxy, long[] bytesOut) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) (proxy != null
                 ? new URL(urlStr).openConnection(proxy)
                 : new URL(urlStr).openConnection());
         try {
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(25000);
+            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            conn.setReadTimeout(READ_TIMEOUT_MS);
             conn.setInstanceFollowRedirects(true);
-            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.0.2");
+            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.0.5");
             conn.setRequestProperty("Accept", "text/plain, */*");
-            int code = conn.getResponseCode();
-            if (code < 200 || code >= 400) throw new IOException("HTTP " + code);
+
+            int code;
+            try {
+                code = conn.getResponseCode();
+            } catch (java.net.SocketTimeoutException e) {
+                throw new SourceError("нет ответа за " + (CONNECT_TIMEOUT_MS / 1000) + " с", 0);
+            }
+            if (code == 404 || code == 410 || code == 451) {
+                throw new SourceError("HTTP " + code + " — источника больше нет", code);
+            }
+            if (code < 200 || code >= 400) {
+                throw new SourceError("HTTP " + code, code);
+            }
+
             ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            long deadline = System.currentTimeMillis() + SOURCE_BUDGET_MS;
             try (InputStream in = conn.getInputStream()) {
                 byte[] chunk = new byte[16384];
-                int n, total = 0;
-                while (total < MAX_DOWNLOAD_BYTES && (n = in.read(chunk)) != -1) {
+                int n;
+                int total = 0;
+                while (total < MAX_DOWNLOAD_BYTES) {
+                    if (isCancelled()) throw new SourceError("загрузка остановлена", 0);
+                    try {
+                        n = in.read(chunk);
+                    } catch (java.net.SocketTimeoutException e) {
+                        if (total == 0) {
+                            throw new SourceError("данные не пошли за " + (READ_TIMEOUT_MS / 1000) + " с", 0);
+                        }
+                        throw new SourceError("данные оборвались на " + (total / 1024)
+                                + " КБ (" + (READ_TIMEOUT_MS / 1000) + " с тишины)", 0);
+                    }
+                    if (n < 0) break;
                     buf.write(chunk, 0, n);
                     total += n;
+                    if (System.currentTimeMillis() > deadline) {
+                        // медленный, но живой источник: забираем что успели
+                        break;
+                    }
                 }
+                if (bytesOut != null) bytesOut[0] = total;
+                if (total == 0) throw new SourceError("пустой ответ (0 байт)", 0);
             }
+
             List<String> out = new ArrayList<>();
             for (String line : new String(buf.toByteArray(), StandardCharsets.UTF_8).split("\\r?\\n")) {
                 String t = line.trim();

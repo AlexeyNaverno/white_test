@@ -107,7 +107,7 @@ public final class NetChecker {
             conn.setConnectTimeout(timeoutMs);
             conn.setReadTimeout(timeoutMs);
             conn.setInstanceFollowRedirects(true);
-            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.0.2");
+            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.0.5");
             int code = conn.getResponseCode();
             if (code >= 400) {
                 conn.disconnect();
@@ -120,6 +120,8 @@ public final class NetChecker {
                 int n;
                 while (total < maxBytes && (n = in.read(buf)) != -1) {
                     total += n;
+                    // «Стоп» должен срабатывать сразу, а не после конца замера
+                    if (ConfigRepository.isCancelled()) break;
                     // медленный канал не должен съедать больше одного таймаута
                     if (System.currentTimeMillis() > deadline) break;
                 }
@@ -142,7 +144,7 @@ public final class NetChecker {
             conn.setReadTimeout(timeoutMs);
             conn.setRequestMethod("GET");
             conn.setInstanceFollowRedirects(true);
-            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.0.2");
+            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.0.5");
             int code = conn.getResponseCode();
             try {
                 InputStream in = conn.getInputStream();
