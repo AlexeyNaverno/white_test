@@ -407,7 +407,7 @@ public class MainActivity extends Activity {
                         StringBuilder sb = new StringBuilder();
                         sb.append("Рабочих: ").append(n)
                           .append(" · лучший: ").append(Prefs.speedText(best))
-                          .append(" · порог: ").append(Prefs.speedText(min));
+                          .append(" · порог: ").append(Prefs.kbitText(Prefs.minSpeedKbit(MainActivity.this)));
                         if (n > 0) {
                             sb.append('\n').append("Собран: ").append(dateStr(at));
                             if (!active.isEmpty()) sb.append(" · активный: ").append(truncate(active, 40));
@@ -548,10 +548,11 @@ public class MainActivity extends Activity {
                     }
                     final List<ProxyConfig> work = testList;
                     final int min = Prefs.minSpeedKbps(MainActivity.this);
+                    final String minText = Prefs.minSpeedText(MainActivity.this);
                     final int total = work.size();
                     final int lanes = Prefs.speedLanes(MainActivity.this);
                     uiLog("Меряю скорость у " + total + " живых параллельно: " + lanes
-                            + " ядра, порог " + Prefs.speedText(min));
+                            + " ядра, порог " + minText);
 
                     // 3) скорость: несколько «дорожек», каждая — свой экземпляр Xray
                     final List<Pool.Entry> found =
@@ -598,7 +599,7 @@ public class MainActivity extends Activity {
                     final long best = n > 0 ? Pool.bestKbps(MainActivity.this) : -1;
                     uiLog("Пул собран: " + n + " рабочих из " + ping.alive.size() + " живых"
                             + (best > 0 ? ", лучший " + Prefs.speedText(best) : "")
-                            + ". Порог: " + Prefs.speedText(min));
+                            + ". Порог: " + minText);
                     runOnUiThread(new Runnable() {
                         @Override public void run() {
                             toast("Пул: " + n + " рабочих"

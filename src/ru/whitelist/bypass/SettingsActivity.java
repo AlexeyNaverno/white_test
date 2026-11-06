@@ -51,11 +51,11 @@ public class SettingsActivity extends Activity {
 
         // --- скорость ---
         section("Скорость");
-        editMinSpeed = numberField(String.valueOf(Prefs.minSpeedKbps(this)));
-        label("Порог «рабочего» конфига, КБ/с: 128 = 128 КБ/с = 1024 кбит/с");
+        editMinSpeed = numberField(String.valueOf(Prefs.minSpeedKbit(this)));
+        label("Порог «рабочего» конфига, кбит/с (128 по умолчанию = 16 КБ/с)");
         root.addView(editMinSpeed);
-        note("Единицы: 1 КБ/с = 8 кбит/с. Значение 128 — это про КИЛОБАЙТЫ в секунду "
-                + "(≈ 1 Мбит/с), а не 128 кбит/с. Уменьшите до 64, если нужен более мягкий отбор.");
+        note("Единицы: 1 КБ/с = 8 кбит/с. По умолчанию 128 кбит/с — это 16 КБ/с: конфиг "
+                + "засчитывается, если качает быстрее 16 КБ/с. Хотите строже — 512 или 1024.");
 
         editLanes = numberField(String.valueOf(Prefs.speedLanes(this)));
         label("Сколько ядер мерить скорость одновременно (1–4, по умолчанию 3)");
@@ -192,7 +192,7 @@ public class SettingsActivity extends Activity {
         root.addView(save);
 
         TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.0.2\n"
+        footer.setText("Обход Белых Списков 0.0.3\n"
                 + versionLine() + "\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");
         footer.setTextColor(TEXT_DIM);
@@ -211,7 +211,7 @@ public class SettingsActivity extends Activity {
         android.content.SharedPreferences.Editor e = Prefs.get(this).edit();
         e.putString(Prefs.SOURCES, normalizeLines(editSources.getText().toString()));
         e.putString(Prefs.SPEED_URLS, normalizeLines(editSpeedUrls.getText().toString()));
-        e.putInt(Prefs.MIN_SPEED_KBPS, Prefs.clamp(parseInt(editMinSpeed, 128), 8, 20000));
+        e.putInt(Prefs.MIN_SPEED_KBIT, Prefs.clamp(parseInt(editMinSpeed, 128), 8, 160000));
         e.putInt(Prefs.GATE_TIMEOUT_MS, Prefs.clamp(parseInt(editGateTimeout, 6000), 2000, 20000));
         e.putInt(Prefs.PING_THREADS, Prefs.clamp(parseInt(editThreads, 60), 1, 200));
         e.putInt(Prefs.PING_TIMEOUT_MS, Prefs.clamp(parseInt(editTimeout, 2500), 300, 15000));

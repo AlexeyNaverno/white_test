@@ -88,7 +88,8 @@ public final class NetChecker {
         public long kbps() {
             if (bytes < Probe.MIN_SAMPLE_BYTES) return -1;
             long t = ms <= 0 ? 1 : ms;
-            return bytes * 1000 / t / 1024;
+            // округление, а не отбрасывание: при пороге 128 кбит/с (16 КБ/с) единица решает
+            return Math.round(bytes * 1000.0 / t / 1024.0);
         }
     }
 
@@ -113,11 +114,14 @@ public final class NetChecker {
                 return new SpeedResult(false, elapsed(start), 0, code);
             }
             long total = 0;
+            long deadline = System.currentTimeMillis() + timeoutMs;
             try (InputStream in = conn.getInputStream()) {
                 byte[] buf = new byte[16384];
                 int n;
                 while (total < maxBytes && (n = in.read(buf)) != -1) {
                     total += n;
+                    // медленный канал не должен съедать больше одного таймаута
+                    if (System.currentTimeMillis() > deadline) break;
                 }
             }
             conn.disconnect();

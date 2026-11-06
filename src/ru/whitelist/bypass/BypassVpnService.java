@@ -261,8 +261,8 @@ public class BypassVpnService extends VpnService {
             long kbps = Probe.speedKbps(this, XRAY_PORT, Prefs.gateTimeoutMs(this));
             long need = Math.max(1L, (long) (Prefs.minSpeedKbps(this) * MIN_SPEED_TOLERANCE));
             if (kbps < need) {
-                lastError = "скорость " + (kbps < 0 ? "не измерена" : kbps + " КБ/с")
-                        + " ниже порога " + Prefs.minSpeedKbps(this) + " КБ/с";
+                lastError = "скорость " + (kbps < 0 ? "не измерена" : Prefs.speedText(kbps))
+                        + " ниже порога " + Prefs.minSpeedText(this);
                 Log.i(TAG, "конфиг " + cfg.name + ": " + lastError);
                 XrayEngine.stop();
                 return false;

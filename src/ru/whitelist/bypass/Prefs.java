@@ -17,7 +17,8 @@ public final class Prefs {
 
     // --- ключи ---
     public static final String SOURCES = "sources";
-    public static final String MIN_SPEED_KBPS = "min_speed_kbps";
+    /** Порог «рабочего» конфига в КИЛОБИТАХ в секунду (128 по умолчанию = 16 КБ/с). */
+    public static final String MIN_SPEED_KBIT = "min_speed_kbit";
     public static final String SPEED_URLS = "speed_urls_v2";
     public static final String PING_THREADS = "ping_threads";
     public static final String PING_TIMEOUT_MS = "ping_timeout_ms";
@@ -98,9 +99,21 @@ public final class Prefs {
 
     // --- скорость ---
 
-    /** Нижняя граница скорости для «рабочего» конфига, КБ/с. 128 по умолчанию. */
+    /** Нижняя граница скорости для «рабочего» конфига, КБ/с. 16 КБ/с (128 кбит/с) по умолчанию. */
     public static int minSpeedKbps(Context c) {
-        return clamp(get(c).getInt(MIN_SPEED_KBPS, 128), 8, 20000);
+        long kbit = minSpeedKbit(c);
+        return Math.max(1, Math.round(kbit / 8f));
+    }
+
+    /** Порог в кбит/с — как он задаётся в настройках. 128 кбит/с = 16 КБ/с. */
+    public static int minSpeedKbit(Context c) {
+        return clamp(get(c).getInt(MIN_SPEED_KBIT, 128), 8, 160000);
+    }
+
+    /** «128 кбит/с (16 КБ/с)» — порог в тех единицах, в которых он задан. */
+    public static String minSpeedText(Context c) {
+        int kbit = minSpeedKbit(c);
+        return kbit + " кбит/с (" + Math.max(1, Math.round(kbit / 8f)) + " КБ/с)";
     }
 
     public static List<String> speedUrls(Context c) {
@@ -158,10 +171,16 @@ public final class Prefs {
         return clamp(get(c).getInt(SPEED_LANES, 3), 1, 4);
     }
 
-    /** «128 КБ/с (1024 кбит/с)» — чтобы единицы не путались. */
+    /** «512 КБ/с (4096 кбит/с)» — чтобы единицы не путались. */
     public static String speedText(long kbps) {
         if (kbps <= 0) return "—";
         return kbps + " КБ/с (" + (kbps * 8) + " кбит/с)";
+    }
+
+    /** «128 кбит/с (16 КБ/с)» из значения в кбит/с. */
+    public static String kbitText(long kbit) {
+        if (kbit <= 0) return "—";
+        return kbit + " кбит/с (" + Math.max(1, Math.round(kbit / 8f)) + " КБ/с)";
     }
 
     // --- DPI на линии ---

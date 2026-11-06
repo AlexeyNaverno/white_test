@@ -51,6 +51,7 @@ public final class QuickSearch {
 
     public static Found find(Context c, Log log) {
         final int min = Prefs.minSpeedKbps(c);
+        final String minText = Prefs.minSpeedText(c);
         final int threads = Prefs.pingThreads(c);
         final int pingTimeout = Prefs.pingTimeoutMs(c);
         final int gateTimeout = Prefs.gateTimeoutMs(c);
@@ -109,7 +110,7 @@ public final class QuickSearch {
                 List<ProxyConfig> rest = new ArrayList<>(carry);
                 carry.clear();
                 log.line("До-проверяю живых из прошлого круга: " + rest.size());
-                Found hit = probeList(c, rest, log, min, gateTimeout, rest.size());
+                Found hit = probeList(c, rest, log, min, minText, gateTimeout, rest.size());
                 if (hit != null) return hit;
                 if (ConfigRepository.isCancelled()) {
                     log.line("Поиск остановлен");
@@ -203,8 +204,9 @@ public final class QuickSearch {
                 log.line("Живых " + outcome.alive.size() + ", за круг проверяю " + probes
                         + ", остальные " + carry.size() + " — в следующем круге");
             }
-            log.line("Проверяю до первого рабочего (порог " + Prefs.speedText(min) + "): " + probes);
-            Found hit = probeList(c, outcome.alive.subList(0, probes), log, min, gateTimeout, probes);
+            log.line("Проверяю до первого рабочего (порог " + minText + "): " + probes);
+            Found hit = probeList(c, outcome.alive.subList(0, probes), log, min, minText,
+                    gateTimeout, probes);
             if (hit != null) return hit;
             if (ConfigRepository.isCancelled()) {
                 log.line("Поиск остановлен");
@@ -216,7 +218,7 @@ public final class QuickSearch {
 
     /** Проверить конфиги подряд (до первого рабочего). Пишет результат каждой проверки. */
     private static Found probeList(Context c, List<ProxyConfig> list, Log log, int min,
-                                   int gateTimeout, int total) {
+                                   String minText, int gateTimeout, int total) {
         for (int i = 0; i < list.size(); i++) {
             if (ConfigRepository.isCancelled()) return null;
             ProxyConfig cfg = list.get(i);
@@ -228,7 +230,7 @@ public final class QuickSearch {
                 return new Found(cfg, r.kbps);
             }
             String why = r.ok
-                    ? Prefs.speedText(r.kbps) + " — ниже порога " + Prefs.speedText(min)
+                    ? Prefs.speedText(r.kbps) + " — ниже порога " + minText
                     : r.reason;
             log.line("  → не прошёл · " + why);
         }
