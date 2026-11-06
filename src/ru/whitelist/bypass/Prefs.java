@@ -17,10 +17,17 @@ public final class Prefs {
 
     // --- ключи ---
     public static final String SOURCES = "sources";
-    public static final String MIN_SPEED_KBPS = "min_speed_kbps";
+    /** Порог «рабочего» конфига в КИЛОБИТАХ в секунду (128 по умолчанию = 16 КБ/с). */
+    public static final String MIN_SPEED_KBIT = "min_speed_kbit";
     public static final String SPEED_URLS = "speed_urls_v2";
     public static final String PING_THREADS = "ping_threads";
     public static final String PING_TIMEOUT_MS = "ping_timeout_ms";
+    /** Цели TCP-пинга «есть ли вообще интернет» (host:port, по одной на строку). */
+    public static final String PING_TARGETS = "ping_targets";
+    /** URL, по которым проверяется живой канал через туннель (5 мест). */
+    public static final String HEALTH_URLS = "health_urls";
+    /** Сколько экземпляров ядра мерить скорость одновременно. */
+    public static final String SPEED_LANES = "speed_lanes";
     public static final String GATE_TIMEOUT_MS = "gate_timeout_ms";
     public static final String DESYNC_LINE = "desync_line";
     public static final String DPI_STRATEGY = "dpi_strategy_v3";
@@ -52,6 +59,33 @@ public final class Prefs {
             "https://raw.githubusercontent.com/ByeWhiteLists/ByeWhiteLists2/refs/heads/main/ByeWhiteLists2.txt"
     };
 
+    /**
+     * Пять мест для TCP-пинга: если ответило хотя бы одно — сеть жива.
+     * Проверяются параллельно, поэтому «медленный, но живой» канал виден сразу.
+     */
+    public static final String[] DEFAULT_PING_TARGETS = {
+            "github.com:443",
+            "www.google.com:443",
+            "www.youtube.com:443",
+            "speed.cloudflare.com:443",
+            "ya.ru:443"
+    };
+
+    /**
+     * Пять мест для проверки КАНАЛА через туннель (HTTP через локальный SOCKS).
+     * Достаточно ответа любого — один сайт может быть недоступен по своим причинам.
+     */
+    public static final String[] DEFAULT_HEALTH_URLS = {
+            "https://www.google.com/generate_204",
+            "https://github.com/",
+            "https://www.youtube.com/",
+            "https://speed.cloudflare.com/__down?bytes=65536",
+            "https://ya.ru/"
+    };
+
+    /** Несколько резервных DNS: первый — основной, остальные — на случай перехвата. */
+    public static final String DEFAULT_DNS = "1.1.1.1, 8.8.8.8, 9.9.9.9";
+
     /** Файлы по 1 МБ с иностранных CDN — по ним измеряется скорость канала. */
     public static final String[] DEFAULT_SPEED_URLS = {
             "https://speed.cloudflare.com/__down?bytes=1048576",
@@ -65,9 +99,21 @@ public final class Prefs {
 
     // --- скорость ---
 
-    /** Нижняя граница скорости для «рабочего» конфига, КБ/с. 128 по умолчанию. */
+    /** Нижняя граница скорости для «рабочего» конфига, КБ/с. 16 КБ/с (128 кбит/с) по умолчанию. */
     public static int minSpeedKbps(Context c) {
-        return clamp(get(c).getInt(MIN_SPEED_KBPS, 128), 8, 20000);
+        long kbit = minSpeedKbit(c);
+        return Math.max(1, Math.round(kbit / 8f));
+    }
+
+    /** Порог в кбит/с — как он задаётся в настройках. 128 кбит/с = 16 КБ/с. */
+    public static int minSpeedKbit(Context c) {
+        return clamp(get(c).getInt(MIN_SPEED_KBIT, 128), 8, 160000);
+    }
+
+    /** «128 кбит/с (16 КБ/с)» — порог в тех единицах, в которых он задан. */
+    public static String minSpeedText(Context c) {
+        int kbit = minSpeedKbit(c);
+        return kbit + " кбит/с (" + Math.max(1, Math.round(kbit / 8f)) + " КБ/с)";
     }
 
     public static List<String> speedUrls(Context c) {
@@ -99,7 +145,42 @@ public final class Prefs {
     }
 
     public static int pingTimeoutMs(Context c) {
-        return clamp(get(c).getInt(PING_TIMEOUT_MS, 2000), 300, 15000);
+        return clamp(get(c).getInt(PING_TIMEOUT_MS, 2500), 300, 15000);
+    }
+
+    /** Цели TCP-пинга (host:port). Пусто/битые строки отбрасываются. */
+    public static List<String> pingTargets(Context c) {
+        List<String> out = lines(get(c).getString(PING_TARGETS, join(DEFAULT_PING_TARGETS)));
+        if (out.isEmpty()) {
+            for (String t : DEFAULT_PING_TARGETS) out.add(t);
+        }
+        return out;
+    }
+
+    /** URL проверки канала через туннель. */
+    public static List<String> healthUrls(Context c) {
+        List<String> out = lines(get(c).getString(HEALTH_URLS, join(DEFAULT_HEALTH_URLS)));
+        if (out.isEmpty()) {
+            for (String u : DEFAULT_HEALTH_URLS) out.add(u);
+        }
+        return out;
+    }
+
+    /** Сколько экземпляров ядра мерить скорость параллельно. */
+    public static int speedLanes(Context c) {
+        return clamp(get(c).getInt(SPEED_LANES, 3), 1, 4);
+    }
+
+    /** «512 КБ/с (4096 кбит/с)» — чтобы единицы не путались. */
+    public static String speedText(long kbps) {
+        if (kbps <= 0) return "—";
+        return kbps + " КБ/с (" + (kbps * 8) + " кбит/с)";
+    }
+
+    /** «128 кбит/с (16 КБ/с)» из значения в кбит/с. */
+    public static String kbitText(long kbit) {
+        if (kbit <= 0) return "—";
+        return kbit + " кбит/с (" + Math.max(1, Math.round(kbit / 8f)) + " КБ/с)";
     }
 
     // --- DPI на линии ---
@@ -121,7 +202,20 @@ public final class Prefs {
     // --- сеть ---
 
     public static String vpnDns(Context c) {
-        return get(c).getString(VPN_DNS, "1.1.1.1").trim();
+        String v = get(c).getString(VPN_DNS, DEFAULT_DNS);
+        v = v == null ? "" : v.trim();
+        return v.isEmpty() ? DEFAULT_DNS : v;
+    }
+
+    /** DNS-серверы списком (запятая/точка с запятой/пробел/перевод строки). */
+    public static List<String> vpnDnsServers(Context c) {
+        List<String> out = new ArrayList<>();
+        for (String p : vpnDns(c).split("[,;\\s]+")) {
+            String t = p.trim();
+            if (!t.isEmpty() && !out.contains(t)) out.add(t);
+        }
+        if (out.isEmpty()) out.add("1.1.1.1");
+        return out;
     }
 
     public static boolean ipv6(Context c) {
