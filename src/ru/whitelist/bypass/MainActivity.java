@@ -604,6 +604,29 @@ public class MainActivity extends Activity {
                         return;
                     }
 
+                    // 1.1) Отсекаем то, что ядро не поднимет НИКОГДА. У таких конфигов
+                    // TCP-пинг проходит, они попадают в «живые» и занимают дорожку замера,
+                    // а потом падают одной и той же ошибкой ядра: в отчёте из 90 замеров
+                    // так уходило 61, и пул собирал 3 рабочих из 1656 «живых».
+                    final Map<String, Integer> rejects = new LinkedHashMap<>();
+                    final boolean relay = Prefs.allowNoTls(MainActivity.this);
+                    all = Probe.usable(all, rejects, relay);
+                    if (!rejects.isEmpty()) {
+                        uiLog(Probe.rejectsText(rejects) + " — не пингую и не меряю");
+                    }
+                    if (relay) {
+                        int viaRelay = 0;
+                        for (ProxyConfig c : all) if (XrayEngine.needsRelay(c)) viaRelay++;
+                        if (viaRelay > 0) {
+                            uiLog("Без TLS — через локальный ретранслятор: " + viaRelay
+                                    + " конфигов (настройки → «Разрешать конфиги без TLS»)");
+                        }
+                    }
+                    if (all.isEmpty()) {
+                        uiLog("Все конфиги несовместимы с ядром — обновите источники в настройках");
+                        return;
+                    }
+
                     // 1.2) стратегии DPI: тот же сбор пула — удобный момент их обновить.
                     // Ошибка здесь тоже не повод бросать замер скорости.
                     if (!ConfigRepository.isCancelled()) {

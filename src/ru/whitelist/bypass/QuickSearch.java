@@ -106,6 +106,15 @@ public final class QuickSearch {
         if (beforeFilter > queue.size()) {
             log.line("Уже в пуле: " + (beforeFilter - queue.size()) + " — пропускаю");
         }
+        // То, что ядро не поднимет никогда (VLESS без TLS к публичному адресу и т.п.),
+        // не должно занимать круги: у таких конфигов TCP-пинг проходит, но ядро падает
+        // на разборе конфига — из 25 проверок за круг так впустую уходило больше половины.
+        final boolean relay = Prefs.allowNoTls(c);
+        final Map<String, Integer> rejects = new LinkedHashMap<>();
+        queue = Probe.usable(queue, rejects, relay);
+        if (!rejects.isEmpty()) {
+            log.line(Probe.rejectsText(rejects) + " — пропускаю");
+        }
         log.line("Сначала перебираю локальный список: " + queue.size()
                 + " конфигов (источники — только когда он кончится)");
 
@@ -157,6 +166,7 @@ public final class QuickSearch {
                         List<ProxyConfig> fresh = new ArrayList<>();
                         addAll(fresh, seen, ConfigRepository.downloaded(c));
                         fresh = withoutPool(fresh, inPool);
+                        fresh = Probe.usable(fresh, rejects, relay);
                         queue.addAll(fresh);   // seen уже отфильтровал дубли, withoutPool — пул
                         log.line("  новых конфигов: " + added + " (всего в хранилище "
                                 + ConfigRepository.countDownloaded(c) + ")");
@@ -194,6 +204,7 @@ public final class QuickSearch {
                                 List<ProxyConfig> fresh = new ArrayList<>();
                                 addAll(fresh, seen, ConfigRepository.downloaded(c));
                                 fresh = withoutPool(fresh, inPool);
+                                fresh = Probe.usable(fresh, rejects, relay);
                                 queue.addAll(fresh);
                             }
                         }
@@ -268,7 +279,8 @@ public final class QuickSearch {
             String key = ConfigRepository.canonicalKey(e.raw);
             if (key == null || !inPool.contains(key)) continue;
             ProxyConfig p = e.cfg();
-            if (p != null) out.add(p);
+            // пул мог остаться с прошлых версий: ядро могло поменять правила
+            if (p != null && XrayEngine.compatProblem(p, Prefs.allowNoTls(c)) == null) out.add(p);
         }
         return out;
     }

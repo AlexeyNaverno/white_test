@@ -69,7 +69,9 @@ public final class PoolIo {
             ProxyConfig p = ProxyConfig.parse(t, "импорт", false);
             if (p == null || p.host == null || p.host.isEmpty() || p.port <= 0) continue;
             res.inFile++;
-            String bad = p.supported ? XrayEngine.compatProblem(p) : p.unsupportedReason;
+            String bad = p.supported
+                    ? XrayEngine.compatProblem(p, Prefs.allowNoTls(c))
+                    : p.unsupportedReason;
             if (bad != null) {
                 res.unsupported++;
                 continue;

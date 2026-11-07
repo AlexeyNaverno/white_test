@@ -277,11 +277,66 @@ public final class Probe {
         return out;
     }
 
+    /**
+     * Отбросить то, что ядро не поднимет НИКОГДА (например, VLESS без TLS к публичному
+     * адресу — Xray 26 такое запрещает на этапе разбора конфига).
+     *
+     * Это важно для скорости: у таких конфигов TCP-пинг проходит, они считаются
+     * «живыми» и занимают дорожку замера, а потом падают с одной и той же ошибкой.
+     * В отчёте из 90 замеров так уходило 61.
+     *
+     * @param rejects сюда складываются причины (причина → сколько конфигов)
+     * @return только те конфиги, которые ядро в принципе примет
+     */
+    public static java.util.List<ProxyConfig> usable(java.util.List<ProxyConfig> in,
+                                                     java.util.Map<String, Integer> rejects,
+                                                     boolean allowRelay) {
+        java.util.List<ProxyConfig> out = new java.util.ArrayList<>();
+        if (in == null) return out;
+        for (ProxyConfig cfg : in) {
+            String bad = cfg == null ? "пустой конфиг" : XrayEngine.compatProblem(cfg, allowRelay);
+            if (bad == null) {
+                out.add(cfg);
+            } else if (rejects != null) {
+                Integer n = rejects.get(bad);
+                rejects.put(bad, n == null ? 1 : n + 1);
+            }
+        }
+        return out;
+    }
+
+    /** «183 (ядро Xray 26 не пускает без TLS — нужен security=tls или reality — 175, …)». */
+    public static String rejectsText(java.util.Map<String, Integer> rejects) {
+        if (rejects == null || rejects.isEmpty()) return "";
+        int total = 0;
+        java.util.List<java.util.Map.Entry<String, Integer>> list =
+                new java.util.ArrayList<>(rejects.entrySet());
+        for (java.util.Map.Entry<String, Integer> e : list) total += e.getValue();
+        java.util.Collections.sort(list, new java.util.Comparator<java.util.Map.Entry<String, Integer>>() {
+            @Override public int compare(java.util.Map.Entry<String, Integer> a,
+                                         java.util.Map.Entry<String, Integer> b) {
+                return b.getValue() - a.getValue();
+            }
+        });
+        StringBuilder sb = new StringBuilder("Несовместимы с ядром: ").append(total).append(" (");
+        int shown = 0;
+        for (java.util.Map.Entry<String, Integer> e : list) {
+            if (shown++ >= 3) break;
+            if (shown > 1) sb.append("; ");
+            String reason = e.getKey();
+            if (reason.length() > 60) reason = reason.substring(0, 60) + "…";
+            sb.append(reason).append(" — ").append(e.getValue());
+        }
+        int rest = list.size() - Math.min(3, list.size());
+        if (rest > 0) sb.append("; ещё причин ").append(rest);
+        return sb.append(')').toString();
+    }
+
     /** Проверить конфиг «с нуля»: поднять, замерить, погасить. */
     public static Result measureConfig(Context ctx, ProxyConfig cfg, int timeoutMs) {
         if (cfg == null) return Result.fail("пустой конфиг");
         if (!cfg.supported) return Result.fail("схема " + cfg.scheme + " не поддерживается");
-        String bad = XrayEngine.compatProblem(cfg);
+        String bad = XrayEngine.compatProblem(cfg, Prefs.allowNoTls(ctx));
         if (bad != null) return Result.fail("несовместим с ядром: " + bad);
         if (ConfigRepository.isCancelled()) return Result.fail("поиск остановлен");
         int port = freePort();
@@ -291,8 +346,8 @@ public final class Probe {
             String json = XrayEngine.buildConfigJson(cfg, port, false, Prefs.vpnDns(ctx), 0);
             controller = XrayEngine.startInstance(ctx, json);
         } catch (Throwable t) {
-            String m = t.getMessage();
-            return Result.fail("ядро не запустилось" + (m == null || m.isEmpty() ? "" : ": " + m));
+            String m = XrayEngine.explainCoreError(t.getMessage());
+            return Result.fail(m.startsWith("ядро") ? m : "ядро не запустилось: " + m);
         }
         try {
             if (!waitSocks(port, SOCKS_WAIT_MS)) {
