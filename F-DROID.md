@@ -10,7 +10,7 @@
 | Публичный репозиторий | ✅ | без изменений |
 | **Нет предсобранных бинарников** | `jniLibs/<abi>/libbyedpi.so` (4 ABI) ❌ | файлы удалены; `libbyedpi.so` собирается из исходников (`native/`) |
 | **Исходники нативных библиотек в репозитории** | были «вне репозитория» (`../native-src`) ❌ | git-сабмодули `native/upstream/byedpi`, `native/upstream/hev-socks5-tunnel` (+ вложенные `lwip`, `yaml`, `hev-task-system`, `src/core`), `native/libv2ray` |
-| **Стандартная система сборки** | `build.sh` (aapt2 + javac + d8) ❌ | Gradle 8.9 + AGP 8.7.3 (`build.gradle`, `settings.gradle`), нативное — ndk-build из Gradle |
+| **Стандартная система сборки** | `build.sh` (aapt2 + javac + d8) ❌ | Gradle 9.8.2 + AGP 9.4.1 (`build.gradle`, `settings.gradle`), нативное — ndk-build из Gradle |
 | **Зависимости из репозиториев** | `tools/fetch_deps.sh` качал 5 файлов во время сборки ❌ | `tor-android`, `jtorctl`, `kotlin-stdlib` — Maven Central; `localbroadcastmanager` — Google Maven; Xray-core — из исходников (`tools/build-libv2ray.sh`) или готовым AAR для своих сборок |
 | Метаданные (описания, иконки, скриншоты) | отсутствовали ❌ | `fastlane/metadata/android/{ru-RU,en-US}/` + `metadata/ru.whitelist.bypass.yml` |
 | Версия в одном месте | `AndroidManifest.xml` | `gradle.properties` (читают Gradle, CI и рецепт) |

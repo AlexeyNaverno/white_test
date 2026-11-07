@@ -291,13 +291,15 @@ metadata/                  черновик рецепта для fdroiddata
 releases/                  тексты релизов по версиям
 ```
 
-CI собирает APK на каждый тег `v*`: ставит JDK 17, Android SDK 35 и NDK 26.3, собирает
+CI собирает APK на каждый тег `v*`: ставит JDK 17, Android SDK 37.1 (build-tools 37.0.0) и NDK 26.3, собирает
 нативные библиотеки из исходников, проверяет версию, подпись и содержимое APK и прикладывает
 к релизу сам APK, `apk.sha256` и `build-report.txt` (badging, список файлов, сертификат, размер).
 
 ## Сборка из исходников
 
-Нужны JDK 17+, Android SDK (platform 35, build-tools 35.0.0), Android NDK 26.3 и Gradle 8.9.
+Нужны JDK 17+, Android SDK (platform 37.1, build-tools 37.0.0), Android NDK 26.3
+и Gradle 9.8.2 (AGP 9.4.1 подтянется сам). Platform 37.1 обязательна: `libv2ray.aar`
+и `tor-android` собраны против неё, `compileSdk` меньше их не примет.
 Нативные библиотеки собираются из исходников, поэтому предсобранных `.so` в репозитории нет.
 
 ```bash

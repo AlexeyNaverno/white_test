@@ -106,6 +106,7 @@ jobs:
 
           SRC_APK=$(find build/outputs/apk/release -name '*.apk' | head -1)
           [ -n "${SRC_APK:-}" ] || { echo "::error::Gradle не собрал APK"; find build/outputs -maxdepth 4 -type f | head -20; exit 1; }
+          echo "::notice title=apk::Gradle собрал $(basename "$SRC_APK")"
           APK="WhitelistBypass-$VERSION.apk"
           mv "$SRC_APK" "$APK"
           sha256sum "$APK" | tee apk.sha256
@@ -164,7 +165,7 @@ jobs:
           echo "Релиз: $TITLE"
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && gh release delete "$GITHUB_REF_NAME" -y || true
           { tail -n +2 "$NOTES"
-            printf '\n### Сборка\n\nGitHub Actions, коммит `%s`: JDK 17, Android SDK 35 (build-tools 35.0.0), NDK 26.3, Gradle 8.9; подпись debug-ключом из репозитория.\n\n' "$GITHUB_SHA"
+            printf '\n### Сборка\n\nGitHub Actions, коммит `%s`: JDK 17, Android SDK 37.1 (build-tools 37.0.0), NDK 26.3, Gradle 9.8.2, AGP 9.4.1; подпись debug-ключом из репозитория.\n\n' "$GITHUB_SHA"
             printf '```\n'; cat build-report.txt; printf '```\n'
           } > /tmp/body.md
           gh release create "$GITHUB_REF_NAME" \
