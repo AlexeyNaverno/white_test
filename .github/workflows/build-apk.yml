@@ -93,9 +93,9 @@ jobs:
           BT=$(ls -d "$ANDROID_SDK"/build-tools/* | sort -V | tail -1)
           export PATH="$BT:$PATH"
           FAIL=0
-          check() { # check "<что>" cmd...
+          check() { # check "<что>" "<команда>"
             desc="$1"; shift
-            if "$@"; then echo "OK: $desc"
+            if bash -c "$*"; then echo "OK: $desc"
             else echo "::error title=assert::$desc"; FAIL=1; fi
           }
           check_q() { # check_q "<что>" "<строка>" "<команда с пайпом>"
