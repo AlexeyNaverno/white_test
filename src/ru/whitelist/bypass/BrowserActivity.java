@@ -64,9 +64,13 @@ public class BrowserActivity extends Activity {
     private static final int TEXT = 0xFFE8EEF5;
     private static final int TEXT_DIM = 0xFF8CA3B8;
     private static final int ACCENT = 0xFF3DDC84;
-    /** Поиск без JavaScript: быстрее через Tor и не зависит от редиректов на клиенте. */
-    private static final String HOME = "https://html.duckduckgo.com/html/";
-    private static final String SEARCH = "https://html.duckduckgo.com/html/?q=";
+    /**
+     * Поиск идёт GET-запросом: только такие запросы можно повторить внутри Tor.
+     * У самого сайта duckduckgo.com форма отправляется POST — она в этом браузере
+     * не работает, поэтому стартовая страница своя, со своей GET-формой.
+     */
+    private static final String SEARCH_BASE = "https://html.duckduckgo.com/html/";
+    private static final String SEARCH = SEARCH_BASE + "?q=";
 
     private static final int MENU_SAVE = 1;
     private static final int MENU_BRIDGES = 2;
@@ -153,7 +157,7 @@ public class BrowserActivity extends Activity {
         ws.setUseWideViewPort(true);
         ws.setBuiltInZoomControls(false);
         ws.setSupportMultipleWindows(false);
-        ws.setUserAgentString(ws.getUserAgentString() + " WhitelistBypass/0.1.0");
+        ws.setUserAgentString(ws.getUserAgentString() + " WhitelistBypass/0.1.1");
         web.setWebViewClient(new WebViewClient() {
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 if (url != null && !url.startsWith("about:")) urlBar.setText(url);
@@ -291,11 +295,42 @@ public class BrowserActivity extends Activity {
                         torReady = true;
                         status.setText("Tor с мостом работает — страницы только через него");
                         status.setTextColor(ACCENT);
-                        web.loadUrl(HOME);
+                        showStartPage();
                     }
                 });
             }
         }, "browser-tor").start();
+    }
+
+    /** Своя стартовая страница: GET-форма поиска и ссылки на движки с GET-формами. */
+    private void showStartPage() {
+        web.loadDataWithBaseURL(SEARCH_BASE, startPage(), "text/html", "utf-8", null);
+    }
+
+    private String startPage() {
+        return "<!doctype html><html><head><meta charset=\"utf-8\">"
+                + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+                + "<style>body{margin:0;padding:22px;background:#000;color:#E8EEF5;"
+                + "font-family:sans-serif}h1{font-size:19px;color:#3DDC84;margin:0 0 14px}"
+                + "form{display:flex;gap:8px}input{flex:1;padding:11px;font-size:15px;"
+                + "border-radius:8px;border:1px solid #222C38;background:#0A0E13;color:#E8EEF5}"
+                + "button{padding:11px 16px;font-size:15px;border-radius:8px;border:0;"
+                + "background:#3DDC84;color:#06210F;font-weight:bold}"
+                + "a{display:inline-block;margin:12px 8px 0 0;color:#8CA3B8;text-decoration:none;"
+                + "border:1px solid #222C38;border-radius:8px;padding:8px 11px;font-size:13px}"
+                + ".t{margin-top:20px;color:#5C7086;font-size:12px;line-height:1.5}"
+                + "</style></head><body>"
+                + "<h1>Поиск через Tor</h1>"
+                + "<form action=\"" + SEARCH_BASE + "\" method=\"get\">"
+                + "<input name=\"q\" placeholder=\"что искать\" autocomplete=\"off\">"
+                + "<button type=\"submit\">Найти</button></form>"
+                + "<div><a href=\"https://www.mojeek.com/\">Mojeek</a>"
+                + "<a href=\"https://www.bing.com/\">Bing</a>"
+                + "<a href=\"https://search.brave.com/\">Brave</a></div>"
+                + "<div class=\"t\">Поиск здесь идёт GET-запросом — такие запросы проходят "
+                + "через Tor. Формы с POST (в том числе поиск на самом duckduckgo.com) в этом "
+                + "браузере не работают: тело POST перехватить нельзя, а отправлять напрямую "
+                + "нельзя тем более.</div></body></html>";
     }
 
     /** Меню «⋮»: сюда убраны все кнопки, чтобы страница занимала весь экран. */
@@ -364,8 +399,10 @@ public class BrowserActivity extends Activity {
         String method = request.getMethod();
         if (!"GET".equalsIgnoreCase(method)) {
             // Тело POST WebView не отдаёт, а отправлять его напрямую нельзя — значит, нельзя и никак.
-            return blocked("Запрос " + method + " через Tor не повторяется: браузер работает "
-                    + "только с GET, чтобы не выйти в обычный интернет.");
+            return blocked("Запрос " + method + " через Tor не повторяется: тело запроса "
+                    + "WebView не отдаёт, а отправлять его напрямую нельзя — это был бы обычный "
+                    + "интернет. Введите запрос в адресной строке сверху: она всегда шлёт GET, "
+                    + "и поиск работает.");
         }
         try {
             return fetch(url, MAX_REDIRECTS);
@@ -385,7 +422,7 @@ public class BrowserActivity extends Activity {
             conn.setReadTimeout(30000);
             conn.setInstanceFollowRedirects(false);
             conn.setRequestProperty("User-Agent",
-                    "Mozilla/5.0 (Linux; Android) WhitelistBypass/0.1.0");
+                    "Mozilla/5.0 (Linux; Android) WhitelistBypass/0.1.1");
             conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,*/*");
             conn.setRequestProperty("Accept-Language", "ru-RU,ru;q=0.9,en;q=0.8");
             int code = conn.getResponseCode();

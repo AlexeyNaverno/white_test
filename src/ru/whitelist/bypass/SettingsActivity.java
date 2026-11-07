@@ -389,7 +389,7 @@ public class SettingsActivity extends Activity {
         root.addView(browser);
 
         TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.1.0\n"
+        footer.setText("Обход Белых Списков 0.1.1\n"
                 + versionLine() + "\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");
         footer.setTextColor(TEXT_DIM);

@@ -670,6 +670,14 @@ public class MainActivity extends Activity {
                     synchronized (found) {
                         snapshot = new ArrayList<>(found);
                     }
+                    if (snapshot.isEmpty() && !work.isEmpty()
+                            && !ConfigRepository.isCancelled()) {
+                        uiLog("Параллельный замер не дал рабочих (канал делится на дорожки) — "
+                                + "проверяю первые 20 по одному…");
+                        List<Pool.Entry> again = Probe.measureSequential(MainActivity.this, work, 20);
+                        snapshot.addAll(again);
+                        uiLog("По одному: рабочих " + again.size());
+                    }
                     Pool.save(MainActivity.this, snapshot);
                     final int n = snapshot.size();
                     final long best = n > 0 ? Pool.bestKbps(MainActivity.this) : -1;

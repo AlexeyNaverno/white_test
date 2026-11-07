@@ -21,7 +21,7 @@ public final class Probe {
     private Probe() {}
 
     /** Меньше этого объёма — оценка скорости недостоверна. */
-    public static final int MIN_SAMPLE_BYTES = 24 * 1024;
+    public static final int MIN_SAMPLE_BYTES = 8 * 1024;
     /** Сколько качаем за один замер (хватает, чтобы оценить и быстрый, и медленный канал). */
     public static final long MAX_SAMPLE_BYTES = 128 * 1024;
     /** Сколько ждём, пока Xray откроет локальный SOCKS. */
@@ -155,6 +155,30 @@ public final class Probe {
     /** Скорость канала через уже поднятый SOCKS, КБ/с. -1 — данных не получили. */
     public static long speedKbps(Context ctx, int socksPort, int timeoutMs) {
         return measureSpeed(ctx, socksPort, timeoutMs).kbps;
+    }
+
+    /**
+     * Запасной заход по одному. Нужен, когда параллельный замер не дал ни одного рабочего:
+     * на медленном канале скорость делится между всеми дорожками, и каждый конфиг получает
+     * лишь часть — при пороге 16 КБ/с пул может остаться пустым при живых серверах.
+     */
+    public static java.util.List<Pool.Entry> measureSequential(Context ctx,
+                                                              java.util.List<ProxyConfig> alive,
+                                                              int limit) {
+        java.util.List<Pool.Entry> out = new java.util.ArrayList<>();
+        if (alive == null || alive.isEmpty()) return out;
+        int min = Prefs.minSpeedKbps(ctx);
+        int gate = Prefs.gateTimeoutMs(ctx);
+        int n = Math.min(limit, alive.size());
+        for (int i = 0; i < n; i++) {
+            if (ConfigRepository.isCancelled()) break;
+            ProxyConfig cfg = alive.get(i);
+            Result r = measureConfig(ctx, cfg, gate);
+            if (r.ok && r.kbps >= min) {
+                out.add(new Pool.Entry(cfg.raw, r.kbps, cfg.latency, System.currentTimeMillis()));
+            }
+        }
+        return out;
     }
 
     /** Проверить конфиг «с нуля»: поднять, замерить, погасить. */

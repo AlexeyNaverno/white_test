@@ -19,7 +19,7 @@ public final class Prefs {
     public static final String SOURCES = "sources";
     /** Порог «рабочего» конфига в КИЛОБИТАХ в секунду (128 по умолчанию = 16 КБ/с). */
     public static final String MIN_SPEED_KBIT = "min_speed_kbit";
-    public static final String SPEED_URLS = "speed_urls_v3";
+    public static final String SPEED_URLS = "speed_urls_v4";
     public static final String PING_THREADS = "ping_threads";
     public static final String PING_TIMEOUT_MS = "ping_timeout_ms";
     /** Цели TCP-пинга «есть ли вообще интернет» (host:port, по одной на строку). */
@@ -131,13 +131,15 @@ public final class Prefs {
 
     /** Файлы по 1 МБ с иностранных CDN — по ним измеряется скорость канала. */
     /**
-     * Замер скорости на маленьких файлах: 32 и 128 КБ хватает, чтобы отличить живой канал
-     * от мёртвого, а ждать приходится в разы меньше, чем на мегабайтных.
+     * Чем меряем скорость: сначала настоящий файл со списком конфигов с GitHub — так замер
+     * заодно доказывает, что через этот конфиг реально достаётся зарубежный источник
+     * (именно за ним люди и идут). Если GitHub не отдался — небольшие файлы Cloudflare и
+     * CacheFly, чтобы замер не зависел от одного сервиса.
      */
     public static final String[] DEFAULT_SPEED_URLS = {
-            "https://speed.cloudflare.com/__down?bytes=32768",
+            "https://raw.githubusercontent.com/luxxuria/harvester/main/speed_tested.txt",
+            "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/vless.txt",
             "https://speed.cloudflare.com/__down?bytes=131072",
-            "https://proof.ovh.net/files/100Kb.dat",
             "http://cachefly.cachefly.net/100kb.test"
     };
 

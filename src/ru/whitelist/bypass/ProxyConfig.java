@@ -157,10 +157,12 @@ public class ProxyConfig {
         return new String[]{hp.substring(0, colon), hp.substring(colon + 1)};
     }
 
+    /** base64 с правильной добивкой: длина %4 == 2 → «==», %4 == 3 → «=». */
     private static byte[] tryBase64(String s) {
         String t = s.trim().replace('-', '+').replace('_', '/');
         int pad = t.length() % 4;
-        if (pad > 0) t = t + "====".substring(pad);
+        if (pad == 2) t = t + "==";
+        else if (pad == 3) t = t + "=";
         return Base64.decode(t, Base64.DEFAULT);
     }
 
