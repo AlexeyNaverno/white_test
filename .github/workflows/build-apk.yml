@@ -61,16 +61,22 @@ jobs:
           set -o pipefail
           gradle --no-daemon assembleRelease 2>&1 | tee /tmp/build.log
 
-      - name: Отладка (лог сборки в отдельную ветку)
+      - name: Лог сборки в артефакт (при падении)
         if: failure()
         run: |
-          tail -c 30000 /tmp/build.log > /tmp/tail.txt || true
-          git config user.name "ci"; git config user.email "ci@localhost"
-          mkdir -p ci-log && cp /tmp/tail.txt ci-log/build.log
-          git checkout -b "ci-log-${{ github.run_id }}"
-          git add ci-log/build.log
-          git commit -m "ci log ${{ github.run_id }}"
-          git push origin "HEAD:ci-log-${{ github.run_id }}"
+          tail -c 60000 /tmp/build.log > build-log.txt 2>/dev/null || true
+          echo "### Последние строки лога" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 40 /tmp/build.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Загрузить лог сборки
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ github.run_id }}
+          path: build-log.txt
+          if-no-files-found: ignore
 
       - name: Проверка артефакта (жёсткие ассерты)
         run: |
