@@ -64,7 +64,7 @@ git ls-files | grep -Ei '\.(so|aar|jar|apk)$'   # пусто — бинарни�
    (в рецепте это место помечено).
 5. **Скриншоты.** В `fastlane/.../images/phoneScreenshots/` лежат два снимка (главный экран
    и раздел «Скорость»). Если UI поменяется — обновить их.
-5. **Отправка:** форк `fdroiddata`, файл `metadata/ru.whitelist.bypass.yml` из этого
+6. **Отправка:** форк `fdroiddata`, файл `metadata/ru.whitelist.bypass.yml` из этого
    репозитория, merge request в `fdroid/fdroiddata`; при первом включении мейнтейнеры
    проверяют сборку и, как правило, просят пару правок (чаще всего — версия Gradle/AGP).
 
