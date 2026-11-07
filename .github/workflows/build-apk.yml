@@ -24,7 +24,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Android SDK (platform 35, build-tools 35.0.0, NDK 26.3)
+      - name: Android SDK (platform 37, build-tools 35.0.0, NDK 26.3)
         run: |
           # На образе runner уже есть SDK: ставим в него нужные пакеты и выставляем ОДИН
           # путь (AGP падает, если ANDROID_HOME и ANDROID_SDK_ROOT указывают в разные места).
@@ -32,7 +32,10 @@ jobs:
           SDKM="$SDK/cmdline-tools/latest/bin/sdkmanager"
           [ -x "$SDKM" ] || SDKM="$(find "$SDK" -name sdkmanager -type f | head -1)"
           yes | "$SDKM" --licenses > /dev/null || true
-          "$SDKM" "platforms;android-35" "build-tools;35.0.0" "ndk;26.3.11579264"
+          # Платформа 37 нужна из-за aar-metadata зависимостей; имя пакета отличается
+          # между ревизиями командных инструментов — пробуем оба варианта.
+          "$SDKM" "platforms;android-37.0" || "$SDKM" "platforms;android-37"
+          "$SDKM" "build-tools;35.0.0" "ndk;26.3.11579264"
           echo "ANDROID_SDK=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
