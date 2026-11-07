@@ -47,6 +47,12 @@ public final class Prefs {
     public static final String TOR_BRIDGES = "tor_bridges";
     /** Замеры мостов: «мост<TAB>КБ/с<TAB>мс», лучшие сверху. */
     public static final String TOR_BRIDGE_RANK = "tor_bridge_rank";
+    /**
+     * Сколько секунд ждём подъёма Tor с ОДНИМ мостом при проверке мостов.
+     * По умолчанию 10 с: живой мост поднимается за считанные секунды, а 45 с на мост
+     * превращали «проверить мосты» в получасовое ожидание без результата.
+     */
+    public static final String TOR_BRIDGE_WAIT_SEC = "tor_bridge_wait_sec";
     /** Человеческий отчёт последней проверки мостов и источников через Tor. */
     public static final String TOR_REPORT = "tor_report";
     public static final String TOR_EXTRA_TORRC = "tor_extra_torrc";
@@ -374,6 +380,16 @@ public final class Prefs {
 
     public static long poolBuiltAt(Context c) { return get(c).getLong(POOL_AT, 0L); }
     public static void setPoolBuiltAt(Context c, long t) { get(c).edit().putLong(POOL_AT, t).apply(); }
+
+    /** Лимит ожидания одного моста, мс (10 с по умолчанию, настраивается). */
+    public static int torBridgeWaitMs(Context c) {
+        return clamp(get(c).getInt(TOR_BRIDGE_WAIT_SEC, 10), 5, 120) * 1000;
+    }
+
+    /** Лимит ожидания одного моста в секундах — как он задан в настройках. */
+    public static int torBridgeWaitSec(Context c) {
+        return clamp(get(c).getInt(TOR_BRIDGE_WAIT_SEC, 10), 5, 120);
+    }
 
     // --- резервный режим через Tor ---
 

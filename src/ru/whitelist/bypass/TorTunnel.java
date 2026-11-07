@@ -36,8 +36,16 @@ public final class TorTunnel {
     public static final String NETWORK = "198.18.0.0";
     public static final String NETMASK = "255.254.0.0";
 
-    /** Сколько ждём, пока Tor поднимется с мостами. */
-    public static final long START_TIMEOUT_MS = 90_000;
+    /**
+     * Сколько ждём подъёма Tor с мостами. Считается из лимита на один мост
+     * (настройка «Лимит ожидания одного моста», 10 с по умолчанию): Tor пробует мосты
+     * по очереди, поэтому времени нужно примерно «мост × лимит», но не меньше 60 с.
+     */
+    public static long startTimeoutMs(Context c) {
+        int again = Math.max(6, TorEngine.candidateBridges(c).size());
+        long t = (long) again * Prefs.torBridgeWaitMs(c);
+        return Math.min(240_000L, Math.max(60_000L, t));
+    }
     /** Сколько ждём на замер скорости через Tor: он медленный, спешить некуда. */
     public static final int SPEED_TIMEOUT_MS = 20_000;
     /** Сколько максимум качаем для замера. */
@@ -47,7 +55,7 @@ public final class TorTunnel {
 
     /** Поднять Tor с мостами и дождаться SOCKS. */
     public static boolean start(Context c) {
-        return TorEngine.ensureStarted(c, START_TIMEOUT_MS);
+        return TorEngine.ensureStarted(c, startTimeoutMs(c));
     }
 
     /** Погасить Tor (только когда он был поднят нами ради туннеля). */

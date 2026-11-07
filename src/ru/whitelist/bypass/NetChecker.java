@@ -70,18 +70,25 @@ public final class NetChecker {
         }
     }
 
-    /** Результат замера: объём + время. */
+    /** Результат замера: объём + время + чем именно закончилось (для лога). */
     public static final class SpeedResult {
         public final boolean ok;
         public final long ms;
         public final long bytes;
         public final int code;
+        /** Почему не получилось: «таймаут ответа», «SOCKS: connection refused» и т.п. */
+        public final String error;
 
         SpeedResult(boolean ok, long ms, long bytes, int code) {
+            this(ok, ms, bytes, code, null);
+        }
+
+        SpeedResult(boolean ok, long ms, long bytes, int code, String error) {
             this.ok = ok;
             this.ms = ms;
             this.bytes = bytes;
             this.code = code;
+            this.error = error == null ? "" : error;
         }
 
         /** КБ/с. -1, если данных слишком мало для честной оценки. */
@@ -91,47 +98,85 @@ public final class NetChecker {
             // округление, а не отбрасывание: при пороге 128 кбит/с (16 КБ/с) единица решает
             return Math.round(bytes * 1000.0 / t / 1024.0);
         }
+
+        /** Короткая причина для лога: «нет данных: таймаут ответа» и т.п. */
+        public String reason() {
+            if (ok && kbps() > 0) return "";
+            if (bytes > 0) return "мало данных (" + (bytes / 1024) + " КБ за " + ms + " мс)";
+            return error.isEmpty() ? "нет данных" : error;
+        }
     }
 
     /**
      * Скачать ДО maxBytes через локальный SOCKS и вернуть фактическое время и объём.
      * Это и есть замер скорости канала.
+     *
+     * ВАЖНО (почему раньше «ничего не проходило»): время считалось от старта запроса,
+     * то есть в него входили CONNECT через SOCKS, TLS-hello и ответ сервера. При лимите
+     * замера 1500 мс на всё это уходила почти вся минута ожидания — и рабочий конфиг
+     * получал «нет данных», хотя качал нормально. Теперь окно замера — от ПЕРВОГО
+     * полученного байта, а на установку соединения даётся отдельный запас.
      */
     public static SpeedResult downloadThroughSocks(String urlStr, String socksHost, int socksPort,
                                                    int timeoutMs, long maxBytes) {
         long start = System.nanoTime();
+        long firstByte = -1;
+        HttpURLConnection conn = null;
+        int code = -1;
+        long total = 0;
         try {
             Proxy proxy = new Proxy(Proxy.Type.SOCKS, new InetSocketAddress(socksHost, socksPort));
             URL url = new URL(urlStr);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection(proxy);
+            conn = (HttpURLConnection) url.openConnection(proxy);
             conn.setConnectTimeout(timeoutMs);
             conn.setReadTimeout(timeoutMs);
             conn.setInstanceFollowRedirects(true);
-            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.1.2");
-            int code = conn.getResponseCode();
+            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.1.3");
+            conn.setRequestProperty("Accept", "*/*");
+            conn.setRequestProperty("Cache-Control", "no-cache");
+            code = conn.getResponseCode();
             if (code >= 400) {
-                conn.disconnect();
-                return new SpeedResult(false, elapsed(start), 0, code);
+                return new SpeedResult(false, elapsed(start), 0, code, "HTTP " + code);
             }
-            long total = 0;
-            long deadline = System.currentTimeMillis() + timeoutMs;
+            // Соединение + TLS + первый байт получают отдельный запас поверх окна замера.
+            long budgetEnd = System.currentTimeMillis() + timeoutMs + HTTP_OPEN_GRACE_MS;
             try (InputStream in = conn.getInputStream()) {
                 byte[] buf = new byte[16384];
                 int n;
-                while (total < maxBytes && (n = in.read(buf)) != -1) {
-                    total += n;
-                    // «Стоп» должен срабатывать сразу, а не после конца замера
+                while (total < maxBytes) {
                     if (ConfigRepository.isCancelled()) break;
-                    // медленный канал не должен съедать больше одного таймаута
-                    if (System.currentTimeMillis() > deadline) break;
+                    if (System.currentTimeMillis() > budgetEnd) break;
+                    n = in.read(buf);
+                    if (n < 0) break;
+                    if (firstByte < 0) firstByte = System.nanoTime();
+                    total += n;
                 }
             }
-            conn.disconnect();
-            return new SpeedResult(total > 0, elapsed(start), total, code);
+            long ms = firstByte < 0
+                    ? elapsed(start)
+                    : Math.max(1L, (System.nanoTime() - firstByte) / 1_000_000L);
+            return new SpeedResult(total > 0, ms, total, code,
+                    total > 0 ? "" : "сервер не отдал данные");
+        } catch (java.net.SocketTimeoutException e) {
+            return new SpeedResult(false, elapsed(start), total, code,
+                    total > 0 ? "оборвалось на " + (total / 1024) + " КБ" : "таймаут ответа");
+        } catch (java.net.ConnectException e) {
+            return new SpeedResult(false, elapsed(start), total, code, "SOCKS не соединил");
+        } catch (java.net.UnknownHostException e) {
+            return new SpeedResult(false, elapsed(start), total, code, "DNS не разрешился");
+        } catch (javax.net.ssl.SSLException e) {
+            return new SpeedResult(false, elapsed(start), total, code, "TLS не прошёл");
         } catch (Exception e) {
-            return new SpeedResult(false, elapsed(start), 0, -1);
+            String m = e.getMessage();
+            return new SpeedResult(false, elapsed(start), total, code,
+                    m == null || m.isEmpty() ? e.getClass().getSimpleName() : m);
+        } finally {
+            if (conn != null) conn.disconnect();
         }
     }
+
+    /** Запас на CONNECT/TLS/первый байт — он не должен отнимать окно замера. */
+    private static final long HTTP_OPEN_GRACE_MS = 2500;
 
     /** Быстрый отклик канала: HTTP 2xx/3xx считается «жив». */
     public static boolean httpCheckThroughSocks(String urlStr, String socksHost, int socksPort,
@@ -144,7 +189,7 @@ public final class NetChecker {
             conn.setReadTimeout(timeoutMs);
             conn.setRequestMethod("GET");
             conn.setInstanceFollowRedirects(true);
-            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.1.2");
+            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.1.3");
             int code = conn.getResponseCode();
             try {
                 InputStream in = conn.getInputStream();

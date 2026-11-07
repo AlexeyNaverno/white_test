@@ -671,6 +671,10 @@ public class MainActivity extends Activity {
                     List<ProxyConfig> known = new ArrayList<>();
                     final List<Pool.Entry> found =
                             java.util.Collections.synchronizedList(new ArrayList<Pool.Entry>());
+                    // Счётчик причин отказа: в конце видно, ЧТО именно мешает —
+                    // «нет данных», «ядро не запустилось», «несовместим» и т.п.
+                    final Map<String, Integer> why = java.util.Collections.synchronizedMap(
+                            new LinkedHashMap<String, Integer>());
                     long now = System.currentTimeMillis();
                     int reused = 0;
                     for (ProxyConfig cfg : ping.alive) {
@@ -736,6 +740,8 @@ public class MainActivity extends Activity {
                                             found.add(new Pool.Entry(cfg.raw, r.kbps,
                                                     cfg.latency, System.currentTimeMillis()));
                                         }
+                                    } else {
+                                        bump(why, r.reason);
                                     }
                                     int d = done.incrementAndGet();
                                     if (d % 5 == 0 || d == total || passed) {
@@ -765,6 +771,7 @@ public class MainActivity extends Activity {
                         uiLog("По одному: рабочих " + again.size());
                     }
                     Pool.save(MainActivity.this, snapshot);
+                    logWhy(why);
                     final int n = snapshot.size();
                     final long best = n > 0 ? Pool.bestKbps(MainActivity.this) : -1;
                     uiLog("Пул собран: " + n + " рабочих из " + ping.alive.size() + " живых"
@@ -790,6 +797,35 @@ public class MainActivity extends Activity {
                 }
             }
         }, "build-pool").start();
+    }
+
+    /** +1 к счётчику причин отказа (ключ — человеческая причина из Probe). */
+    private static void bump(Map<String, Integer> map, String reason) {
+        if (reason == null) reason = "без причины";
+        String key = reason.length() > 60 ? reason.substring(0, 60) + "…" : reason;
+        synchronized (map) {
+            Integer old = map.get(key);
+            map.put(key, old == null ? 1 : old + 1);
+        }
+    }
+
+    /** Итог: «почему не прошло» по частоте — самое полезное при разборе «ничего не находит». */
+    private void logWhy(Map<String, Integer> map) {
+        if (map.isEmpty()) return;
+        List<Map.Entry<String, Integer>> list;
+        synchronized (map) {
+            list = new ArrayList<>(map.entrySet());
+        }
+        java.util.Collections.sort(list, new java.util.Comparator<Map.Entry<String, Integer>>() {
+            @Override public int compare(Map.Entry<String, Integer> a, Map.Entry<String, Integer> b) {
+                return b.getValue().compareTo(a.getValue());
+            }
+        });
+        uiLog("Почему не прошли замер (" + list.size() + " причин):");
+        for (int i = 0; i < Math.min(8, list.size()); i++) {
+            Map.Entry<String, Integer> e = list.get(i);
+            uiLog("  ×" + e.getValue() + " · " + e.getKey());
+        }
     }
 
     private void cancelSearch() {
@@ -823,6 +859,8 @@ public class MainActivity extends Activity {
         String line = message == null ? "" : message;
         if (logBuffer.length() > 0) logBuffer.append('\n');
         logBuffer.append(line);
+        // Копия в общий буфер: из настроек консоль сохраняется в .json одной кнопкой.
+        Console.line(line);
         if (logBuffer.length() > LOG_MAX_CHARS) {
             // режем по границе строки, чтобы не рвать половину сообщения
             int cut = logBuffer.indexOf("\n", logBuffer.length() - LOG_MAX_CHARS);
