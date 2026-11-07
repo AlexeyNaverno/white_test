@@ -89,11 +89,18 @@ public final class SettingsIo {
             }
             root.put("prefs", prefs);
 
+            // Свои наборы (сохранённые из .json) — чтобы перенести их на другое устройство.
+            JSONArray presets = Presets.customAsJson(c);
+            if (presets.length() > 0) root.put("presets", presets);
+
             JSONArray notes = new JSONArray();
             notes.put("Значения в «prefs» — то, что видно в настройках. Многие списки "
                     + "хранятся строками через перевод строки; это нормально.");
             notes.put("Импорт применяет только известные ключи и только с тем же типом "
                     + "значения. Лишние ключи игнорируются, ошибок в приложении не будет.");
+            notes.put("Раздел «presets» — свои наборы настроек; при импорте они снова "
+                    + "появятся в списке наборов рядом с готовыми («Стандарт», «Wi-Fi», "
+                    + "«Белые списки»).");
             notes.put("Диапазоны: min_speed_kbit 8…160000; ping_timeout_ms 300…15000; "
                     + "gate_timeout_ms 800…20000; speed_lanes 1…4; tor_bridge_wait_sec 5…120; "
                     + "monitor_interval_sec 5…300; switch_timeout_sec 5…3600.");
@@ -104,24 +111,39 @@ public final class SettingsIo {
         }
     }
 
-    /** Человеческий итог импорта: что применили, что пропустили. */
-    public static String importJson(Context c, String text) {
-        if (text == null || text.trim().isEmpty()) return "Файл пустой";
-        JSONObject prefs;
-        try {
-            JSONObject root = new JSONObject(text);
-            prefs = root.optJSONObject("prefs");
-            if (prefs == null) prefs = root;  // допускаем «голый» список настроек
-        } catch (Exception e) {
-            return "Это не JSON: " + e.getMessage();
+    /** Итог применения набора/импорта: что применили, что пропустили. */
+    public static final class Result {
+        public final int applied;
+        public final int skipped;
+        public final int wrongType;
+
+        Result(int applied, int skipped, int wrongType) {
+            this.applied = applied;
+            this.skipped = skipped;
+            this.wrongType = wrongType;
         }
 
+        public String text() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("применено ").append(applied);
+            if (skipped > 0) sb.append(" · пропущено неизвестных ключей ").append(skipped);
+            if (wrongType > 0) sb.append(" · не совпал тип у ").append(wrongType);
+            if (applied == 0) sb.append(". Ничего не изменилось — это точно файл настроек?");
+            return sb.toString();
+        }
+    }
+
+    /**
+     * Применить объект настроек. Осторожно: только известные ключи и только с тем же типом
+     * значения, что лежит в настройках сейчас. Испорченный файл поэтому ничего не ломает.
+     */
+    public static Result applyPrefs(Context c, JSONObject prefs) {
         SharedPreferences sp = Prefs.get(c);
         SharedPreferences.Editor e = sp.edit();
-        List<String> applied = new ArrayList<>();
-        List<String> skipped = new ArrayList<>();
+        java.util.Map<String, ?> current = sp.getAll();
+        int applied = 0;
+        int skipped = 0;
         int wrongType = 0;
-
         for (java.util.Iterator<String> it = prefs.keys(); it.hasNext(); ) {
             String key = it.next();
             Object value;
@@ -132,14 +154,15 @@ public final class SettingsIo {
             }
             if ("error".equals(key) || "app".equals(key) || "kind".equals(key)
                     || "format".equals(key) || "version".equals(key)
-                    || "exportedAt".equals(key) || "notes".equals(key)) {
+                    || "exportedAt".equals(key) || "notes".equals(key)
+                    || "presets".equals(key) || "presetTitle".equals(key)) {
                 continue;
             }
             if (!SETTINGS.contains(key)) {
-                skipped.add(key);
+                skipped++;
                 continue;
             }
-            Object old = sp.getAll().get(key);
+            Object old = current.get(key);
             if (old != null && !sameKind(old, value)) {
                 wrongType++;
                 continue;
@@ -152,33 +175,56 @@ public final class SettingsIo {
                 e.putLong(key, (Long) value);
             } else if (value instanceof Boolean) {
                 e.putBoolean(key, (Boolean) value);
-            } else {
+            } else if (value instanceof Number) {
                 // числа из JSON бывают Double — приводим к int, если это целое
-                if (value instanceof Number) {
-                    e.putInt(key, (int) Math.round(((Number) value).doubleValue()));
-                } else {
-                    wrongType++;
-                    continue;
-                }
+                e.putInt(key, (int) Math.round(((Number) value).doubleValue()));
+            } else {
+                wrongType++;
+                continue;
             }
-            applied.add(key);
+            applied++;
         }
         e.apply();
+        return new Result(applied, skipped, wrongType);
+    }
+
+    /**
+     * Импорт файла настроек: применить значения и сохранить сам файл как дополнительный
+     * набор в списке (чтобы к нему можно было вернуться одной кнопкой).
+     */
+    public static String importJson(Context c, String text) {
+        if (text == null || text.trim().isEmpty()) return "Файл пустой";
+        JSONObject root;
+        JSONObject prefs;
+        try {
+            root = new JSONObject(text);
+            prefs = root.optJSONObject("prefs");
+            if (prefs == null) prefs = root;  // допускаем «голый» список настроек
+        } catch (Exception e) {
+            return "Это не JSON: " + e.getMessage();
+        }
+
+        Result r = applyPrefs(c, prefs);
+
+        // Файл остаётся в списке наборов — как «Мой из .json».
+        String saved = Presets.saveCustom(c, text);
+
+        // Вместе с настройками могли приехать и чужие наборы.
+        JSONArray extra = root.optJSONArray("presets");
+        int extraSaved = 0;
+        if (extra != null) {
+            for (int i = 0; i < extra.length(); i++) {
+                JSONObject o = extra.optJSONObject(i);
+                if (o == null) continue;
+                if (Presets.saveCustom(c, o.toString()) != null) extraSaved++;
+            }
+        }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("Применено настроек: ").append(applied.size());
-        if (!skipped.isEmpty()) {
-            sb.append(" · пропущено неизвестных ключей: ").append(skipped.size());
-        }
-        if (wrongType > 0) {
-            sb.append(" · не совпал тип: ").append(wrongType);
-        }
-        if (applied.isEmpty()) {
-            sb.append(". Ничего не изменилось — проверьте, что это файл настроек "
-                    + "приложения (ключ «prefs»).");
-        } else {
-            sb.append(". Перезапустите приложение, если что-то выглядит по-старому.");
-        }
+        sb.append("Импорт: ").append(r.text());
+        if (saved != null) sb.append(". Сохранено как набор «").append(saved).append("»");
+        if (extraSaved > 0) sb.append(", добавлено наборов из файла: ").append(extraSaved);
+        if (r.applied > 0) sb.append(". Перезапустите приложение, если что-то выглядит по-старому.");
         return sb.toString();
     }
 
