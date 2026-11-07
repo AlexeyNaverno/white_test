@@ -24,7 +24,9 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -48,9 +50,16 @@ public class MainActivity extends Activity {
     private static final int TEXT_DIM = 0xFF8CA3B8;
     private static final int RED = 0xFFFF5252;
     private static final int ORANGE = 0xFFFFAB40;
+    /** Фиолетовый — туннель идёт через Tor-мосты (резервный режим). */
+    private static final int PURPLE = 0xFF9C27B0;
+    private static final int PURPLE_DARK = 0xFF6A1B9A;
 
     /** Сколько живых конфигов «вживую» проверяем при сборе пула (дольше — не быстрее). */
-    private static final int MAX_SPEED_TESTS = 300;
+    private static final int MAX_SPEED_TESTS = 150;
+    /** Как только в пуле набралось столько рабочих — дальше не меряем: пул уже есть. */
+    private static final int POOL_ENOUGH = 25;
+    /** Замер из пула моложе этого возраста переиспользуем, не гоняя конфиг заново. */
+    private static final long POOL_REUSE_MS = 12 * 60 * 60 * 1000L;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
 
@@ -68,9 +77,10 @@ public class MainActivity extends Activity {
         @Override public void run() {
             boolean on = BypassVpnService.isRunning();
             if (on) {
-                statusPill.setText("● Подключено");
-                statusPill.setTextColor(ACCENT);
-                stylePowerButton("on");
+                boolean tor = BypassVpnService.isTorMode();
+                statusPill.setText(tor ? "● Tor-мосты" : "● Подключено");
+                statusPill.setTextColor(tor ? PURPLE : ACCENT);
+                stylePowerButton(tor ? "tor" : "on");
             } else if (BypassVpnService.isConnecting()) {
                 statusPill.setText("● Подключение…");
                 statusPill.setTextColor(ORANGE);
@@ -94,6 +104,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         CrashReporter.install(this);
+        Prefs.migrate(this);
         String previousCrash = CrashReporter.consumeIfPresent(this);
         super.onCreate(savedInstanceState);
 
@@ -283,7 +294,16 @@ public class MainActivity extends Activity {
         int bg;
         int fg;
         String text;
-        if ("on".equals(state)) {
+        if ("tor".equals(state)) {
+            // Резервный режим: фиолетовая кнопка — сразу видно, что канал идёт через Tor.
+            bg = PURPLE;
+            fg = 0xFFFFFFFF;
+            text = "Отключить";
+        } else if ("tor-connecting".equals(state)) {
+            bg = PURPLE_DARK;
+            fg = 0xFFFFFFFF;
+            text = "Отмена";
+        } else if ("on".equals(state)) {
             bg = 0xFFC62828;
             fg = 0xFFFFFFFF;
             text = "Отключить";
@@ -387,7 +407,8 @@ public class MainActivity extends Activity {
                 if (intent == null) return;
                 String state = intent.getStringExtra(BypassVpnService.EXTRA_STATE);
                 String detail = intent.getStringExtra(BypassVpnService.EXTRA_DETAIL);
-                refreshConnectionUi(state, detail);
+                String mode = intent.getStringExtra(BypassVpnService.EXTRA_MODE);
+                refreshConnectionUi(state, detail, mode);
             }
         };
         IntentFilter filter = new IntentFilter(BypassVpnService.ACTION_STATUS);
@@ -412,22 +433,24 @@ public class MainActivity extends Activity {
         if (intent == null) return;
         String state = intent.getStringExtra(BypassVpnService.EXTRA_STATE);
         if (state == null) return;
-        refreshConnectionUi(state, intent.getStringExtra(BypassVpnService.EXTRA_DETAIL));
+        refreshConnectionUi(state, intent.getStringExtra(BypassVpnService.EXTRA_DETAIL),
+                intent.getStringExtra(BypassVpnService.EXTRA_MODE));
     }
 
-    private void refreshConnectionUi(String state, String detail) {
+    private void refreshConnectionUi(String state, String detail, String mode) {
         if (state == null) return;
+        boolean tor = BypassVpnService.MODE_TOR.equals(mode) || BypassVpnService.isTorMode();
         if ("on".equals(state)) {
-            statusPill.setText("● Подключено");
-            statusPill.setTextColor(ACCENT);
-            stylePowerButton("on");
+            statusPill.setText(tor ? "● Tor-мосты" : "● Подключено");
+            statusPill.setTextColor(tor ? PURPLE : ACCENT);
+            stylePowerButton(tor ? "tor" : "on");
             if (detail != null && !detail.isEmpty()) log("Подключено: " + detail);
             applyRunningUi(true);
             refreshPoolCard();
         } else if ("connecting".equals(state)) {
-            statusPill.setText("● Подключение…");
-            statusPill.setTextColor(ORANGE);
-            stylePowerButton("connecting");
+            statusPill.setText(tor ? "● Tor-мосты…" : "● Подключение…");
+            statusPill.setTextColor(tor ? PURPLE : ORANGE);
+            stylePowerButton(tor ? "tor-connecting" : "connecting");
             if (detail != null) log(detail);
         } else if ("error".equals(state)) {
             statusPill.setText("● Ошибка");
@@ -448,10 +471,12 @@ public class MainActivity extends Activity {
 
     private void applyRunningUi(boolean on) {
         if (on) {
-            statusPill.setText("● Подключено");
-            statusPill.setTextColor(ACCENT);
-            stylePowerButton("on");
-        } else if (!"● Подключение…".contentEquals(statusPill.getText())) {
+            boolean tor = BypassVpnService.isTorMode();
+            statusPill.setText(tor ? "● Tor-мосты" : "● Подключено");
+            statusPill.setTextColor(tor ? PURPLE : ACCENT);
+            stylePowerButton(tor ? "tor" : "on");
+        } else if (!"● Подключение…".contentEquals(statusPill.getText())
+                && !"● Tor-мосты…".contentEquals(statusPill.getText())) {
             stylePowerButton("off");
         }
     }
@@ -553,15 +578,24 @@ public class MainActivity extends Activity {
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
-                    // 1) обновить ВСЕ списки
-                    ConfigRepository.UpdateResult res = ConfigRepository.updateAll(
-                            MainActivity.this, new ConfigRepository.Progress() {
-                                @Override public void onMessage(String message) { uiLog(message); }
-                            });
-                    uiLog("Источники: " + res);
-                    for (String m : res.messages) uiLog("· " + m);
-                    if (res.stored == 0 && ConfigRepository.countDownloaded(MainActivity.this) > 0) {
-                        uiLog("Загрузка ничего не дала — работаю с локальным списком");
+                    // 1) обновить ВСЕ списки. Любая ошибка на этом шаге не должна валить
+                    // весь сбор пула: работаем с тем, что уже лежит в хранилище.
+                    ConfigRepository.UpdateResult res = null;
+                    try {
+                        res = ConfigRepository.updateAll(
+                                MainActivity.this, new ConfigRepository.Progress() {
+                                    @Override public void onMessage(String message) { uiLog(message); }
+                                });
+                        uiLog("Источники: " + res);
+                        for (String m : res.messages) uiLog("· " + m);
+                        if (res.stored == 0
+                                && ConfigRepository.countDownloaded(MainActivity.this) > 0) {
+                            uiLog("Загрузка ничего не дала — работаю с локальным списком");
+                        }
+                    } catch (Throwable t) {
+                        Log.e("MainActivity", "sources failed", t);
+                        uiLog("Источники: сбой (" + t.getMessage()
+                                + ") — продолжаю с локальным списком");
                     }
 
                     List<ProxyConfig> all = ConfigRepository.all(MainActivity.this);
@@ -570,13 +604,21 @@ public class MainActivity extends Activity {
                         return;
                     }
 
-                    // 1.2) стратегии DPI: тот же сбор пула — удобный момент их обновить
+                    // 1.2) стратегии DPI: тот же сбор пула — удобный момент их обновить.
+                    // Ошибка здесь тоже не повод бросать замер скорости.
                     if (!ConfigRepository.isCancelled()) {
-                        uiLog("Обновляю стратегии DPI-обхода с GitHub…");
-                        int n = DpiStrategies.refresh(MainActivity.this, new DpiStrategies.Log() {
-                            @Override public void line(String message) { uiLog(message); }
-                        });
-                        uiLog("DPI-стратегии: доступно " + n);
+                        try {
+                            uiLog("Обновляю стратегии DPI-обхода с GitHub…");
+                            int n = DpiStrategies.refresh(MainActivity.this,
+                                    new DpiStrategies.Log() {
+                                        @Override public void line(String message) {
+                                            uiLog(message);
+                                        }
+                                    });
+                            uiLog("DPI-стратегии: доступно " + n);
+                        } catch (Throwable t) {
+                            uiLog("DPI-стратегии: пропускаю (" + t.getMessage() + ")");
+                        }
                     }
 
                     // 1.5) сеть: 5 целей параллельно
@@ -616,11 +658,49 @@ public class MainActivity extends Activity {
                     if (ping.alive.size() > 10) aliveLine.append(" · ещё ").append(ping.alive.size() - 10);
                     uiLog(aliveLine.toString());
 
-                    List<ProxyConfig> testList = ping.alive;
+                    // 3) скорость: сначала НОВЫЕ конфиги, затем уже лежащие в пуле.
+                    // Старые замеры моложе POOL_REUSE_MS переиспользуем, а не гоняем заново:
+                    // иначе каждый сбор пула заново меряет те же 200 конфигов (это и было
+                    // «результат сильно не сразу»).
+                    final Map<String, Pool.Entry> oldPool = new LinkedHashMap<>();
+                    for (Pool.Entry e : Pool.load(MainActivity.this)) {
+                        String key = ConfigRepository.canonicalKey(e.raw);
+                        if (key != null) oldPool.put(key, e);
+                    }
+                    List<ProxyConfig> fresh = new ArrayList<>();
+                    List<ProxyConfig> known = new ArrayList<>();
+                    final List<Pool.Entry> found =
+                            java.util.Collections.synchronizedList(new ArrayList<Pool.Entry>());
+                    long now = System.currentTimeMillis();
+                    int reused = 0;
+                    for (ProxyConfig cfg : ping.alive) {
+                        String key = ConfigRepository.canonicalKey(cfg.raw);
+                        Pool.Entry old = key == null ? null : oldPool.get(key);
+                        if (old == null) {
+                            fresh.add(cfg);
+                            continue;
+                        }
+                        if (old.at > 0 && now - old.at < POOL_REUSE_MS) {
+                            // недавно замерен и всё ещё пингуется — оставляем как есть
+                            synchronized (found) {
+                                found.add(old);
+                            }
+                            reused++;
+                        } else {
+                            known.add(cfg);
+                        }
+                    }
+                    if (reused > 0) {
+                        uiLog("Замеры из пула свежие (< " + (POOL_REUSE_MS / 3600000) + " ч): "
+                                + reused + " конфигов не перемеряю");
+                    }
+                    List<ProxyConfig> ordered = new ArrayList<>(fresh);
+                    ordered.addAll(known);
+                    List<ProxyConfig> testList = ordered;
                     if (testList.size() > MAX_SPEED_TESTS) {
-                        uiLog("Живых больше " + MAX_SPEED_TESTS + " — меряю первые "
-                                + MAX_SPEED_TESTS + " по пингу");
-                        testList = new ArrayList<>(testList.subList(0, MAX_SPEED_TESTS));
+                        uiLog("К замеру " + ordered.size() + " — меряю первые "
+                                + MAX_SPEED_TESTS + " (новые вперёд)");
+                        testList = new ArrayList<>(ordered.subList(0, MAX_SPEED_TESTS));
                     }
                     final List<ProxyConfig> work = testList;
                     final int min = Prefs.minSpeedKbps(MainActivity.this);
@@ -628,19 +708,22 @@ public class MainActivity extends Activity {
                     final int total = work.size();
                     final int lanes = Prefs.speedLanes(MainActivity.this);
                     uiLog("Меряю скорость у " + total + " живых параллельно: " + lanes
-                            + " ядра, порог " + minText);
+                            + " ядра, порог " + minText
+                            + " (остановлюсь на " + POOL_ENOUGH + " рабочих)");
 
-                    // 3) скорость: несколько «дорожек», каждая — свой экземпляр Xray
-                    final List<Pool.Entry> found =
-                            java.util.Collections.synchronizedList(new ArrayList<Pool.Entry>());
+                    // «Дорожки»: каждая — свой экземпляр Xray. Считаем только НОВЫЕ
+                    // удачные замеры: переиспользованные из пула не должны останавливать
+                    // замер раньше времени.
                     final AtomicInteger cursor = new AtomicInteger();
                     final AtomicInteger done = new AtomicInteger();
+                    final AtomicInteger measuredOk = new AtomicInteger();
                     ExecutorService lane = Executors.newFixedThreadPool(lanes);
                     for (int i = 0; i < lanes; i++) {
                         lane.execute(new Runnable() {
                             @Override public void run() {
                                 for (;;) {
                                     if (ConfigRepository.isCancelled()) break;
+                                    if (measuredOk.get() >= POOL_ENOUGH) break;
                                     int idx = cursor.getAndIncrement();
                                     if (idx >= total) break;
                                     ProxyConfig cfg = work.get(idx);
@@ -648,8 +731,11 @@ public class MainActivity extends Activity {
                                             Prefs.gateTimeoutMs(MainActivity.this));
                                     boolean passed = r.ok && r.kbps >= min;
                                     if (passed) {
-                                        found.add(new Pool.Entry(cfg.raw, r.kbps,
-                                                cfg.latency, System.currentTimeMillis()));
+                                        measuredOk.incrementAndGet();
+                                        synchronized (found) {
+                                            found.add(new Pool.Entry(cfg.raw, r.kbps,
+                                                    cfg.latency, System.currentTimeMillis()));
+                                        }
                                     }
                                     int d = done.incrementAndGet();
                                     if (d % 5 == 0 || d == total || passed) {

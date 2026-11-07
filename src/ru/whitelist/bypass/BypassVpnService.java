@@ -36,6 +36,10 @@ public class BypassVpnService extends VpnService {
     public static final String ACTION_STATUS = "ru.whitelist.bypass.action.STATUS";
     public static final String EXTRA_STATE = "state";    // off | connecting | on | error
     public static final String EXTRA_DETAIL = "detail";
+    /** Каким каналом поднят туннель: xray (конфиг из пула) или tor (резервные мосты). */
+    public static final String EXTRA_MODE = "mode";      // xray | tor
+    public static final String MODE_XRAY = "xray";
+    public static final String MODE_TOR = "tor";
 
     private static final String CHANNEL_ID = "bypass_vpn";
     private static final int NOTIFICATION_ID = 1001;
@@ -60,8 +64,16 @@ public class BypassVpnService extends VpnService {
     /** Автоподбор стратегии DPI делаем один раз за подключение, а не на каждую попытку. */
     private boolean dpiAutotuned = false;
     private static volatile int currentSocksPort = -1;
+    /** Туннель поднят через Tor-мосты (резервный режим), а не через конфиг из пула. */
+    private volatile boolean torMode = false;
+    private static volatile String currentMode = MODE_XRAY;
+    /** Локальный SOCKS, в который смотрит hev-socks5-tunnel (Xray 10811 или Tor 9050). */
+    private static volatile int localSocksPort = XRAY_PORT;
 
     public static boolean isRunning() { return running.get(); }
+    /** xray | tor — каким каналом сейчас работает туннель. */
+    public static String currentMode() { return currentMode; }
+    public static boolean isTorMode() { return MODE_TOR.equals(currentMode); }
     /** Идёт попытка подключения (сервис занят поиском/проверкой). */
     public static boolean isConnecting() { return connectingFlag; }
     public static String currentDetail() { return currentDetail; }
@@ -80,6 +92,7 @@ public class BypassVpnService extends VpnService {
     @Override
     public void onCreate() {
         super.onCreate();
+        Prefs.migrate(this);
         createChannel();
     }
 
@@ -120,6 +133,9 @@ public class BypassVpnService extends VpnService {
         if (ACTION_START.equals(action)) {
             if (running.get() || tun != null) resetEngine(); // повторный старт = перезапуск
             dpiAutotuned = false;
+            torMode = false;
+            currentMode = MODE_XRAY;
+            localSocksPort = XRAY_PORT;
             stopRequested.set(false);
             ConfigRepository.clearCancel();
             lastError = "";
@@ -144,6 +160,7 @@ public class BypassVpnService extends VpnService {
                 candidates = quickFind();
             }
             if (candidates.isEmpty()) {
+                if (tryTorFallback("Рабочих конфигов нет")) return;
                 fail("Рабочих конфигов нет. Нажмите «Собрать пул» (обновит списки и замерит скорость).");
                 return;
             }
@@ -166,8 +183,11 @@ public class BypassVpnService extends VpnService {
                 }
             }
             if (!up) {
-                fail(("Не удалось подключиться ни к одному из " + attempt
-                        + " конфигов. " + (lastError.isEmpty() ? "" : lastError)).trim());
+                String why = ("Не удалось подключиться ни к одному из " + attempt
+                        + " конфигов. " + (lastError.isEmpty() ? "" : lastError)).trim();
+                // Резерв: пустить трафик через Tor-мосты (если разрешено настройками).
+                if (tryTorFallback(why)) return;
+                fail(why);
                 return;
             }
 
@@ -177,7 +197,9 @@ public class BypassVpnService extends VpnService {
                 fail("Не удалось создать TUN (VPN не разрешён?)");
                 return;
             }
-            startTunnel(XRAY_PORT);
+            localSocksPort = XRAY_PORT;
+            currentMode = MODE_XRAY;
+            startTunnel(XRAY_PORT, false);
             running.set(true);
             acquireWakeLock();
             startMonitor();
@@ -186,6 +208,119 @@ public class BypassVpnService extends VpnService {
             Log.e(TAG, "старт не удался", t);
             fail(t.getMessage() != null ? t.getMessage() : "Ошибка запуска");
         }
+    }
+
+    /**
+     * Резервный запуск: весь трафик через Tor-мосты.
+     *
+     * Порядок тот же, что и у обычного запуска: сначала проверяем канал (мосты поднялись,
+     * скорость выше порога), и только потом создаём TUN. Поэтому неудачная попытка
+     * не оставляет телефон без связи.
+     *
+     * true — резерв поднят, сервис уже в режиме «включено» (дальше вызывающему делать
+     * нечего); false — резерв недоступен, причину пишем в {@link #lastError}.
+     */
+    private boolean tryTorFallback(String why) {
+        if (!Prefs.torFallback(this)) {
+            lastError = why + ". Резерв Tor выключен в настройках";
+            return false;
+        }
+        if (stopRequested.get() || ConfigRepository.isCancelled()) {
+            lastError = "Остановлено пользователем";
+            return false;
+        }
+        Log.i(TAG, "VPN не отвечает (" + why + ") — пробую Tor-мосты");
+        // Кнопка становится фиолетовой сразу, как только начали пробовать резерв:
+        // пользователь должен видеть, что сейчас происходит не обычное подключение.
+        currentMode = MODE_TOR;
+        sendStatus("connecting", why + " — пробую Tor-мосты…");
+
+        // Tor с мостами поднимается долго (до 90 с), а «Остановить» должно срабатывать
+        // сразу: поднимаем в отдельном потоке и ждём, поглядывая на stopRequested.
+        final AtomicBoolean torUp = new AtomicBoolean(false);
+        Thread torStarter = new Thread(new Runnable() {
+            @Override public void run() {
+                torUp.set(TorTunnel.start(BypassVpnService.this));
+            }
+        }, "tor-fallback");
+        torStarter.setDaemon(true);
+        torStarter.start();
+        long torDeadline = System.currentTimeMillis() + TorTunnel.START_TIMEOUT_MS + 8000;
+        while (torStarter.isAlive() && System.currentTimeMillis() < torDeadline) {
+            if (stopRequested.get() || ConfigRepository.isCancelled()) {
+                TorTunnel.stop(this);
+                lastError = "Остановлено пользователем";
+                currentMode = MODE_XRAY;
+                return false;
+            }
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                break;
+            }
+        }
+        if (!torUp.get()) {
+            String e = TorEngine.lastError();
+            lastError = why + ". Tor не поднялся" + (e == null || e.isEmpty() ? "" : ": " + e);
+            Log.w(TAG, lastError);
+            TorTunnel.stop(this);
+            currentMode = MODE_XRAY;
+            return false;
+        }
+        if (stopRequested.get() || ConfigRepository.isCancelled()) {
+            TorTunnel.stop(this);
+            lastError = "Остановлено пользователем";
+            currentMode = MODE_XRAY;
+            return false;
+        }
+
+        sendStatus("connecting", "Tor-мосты подняты, замеряю скорость…");
+        long kbps = TorTunnel.measureKbps(this, TorTunnel.SPEED_TIMEOUT_MS);
+        if (!TorTunnel.fastEnough(this, kbps)) {
+            lastError = why + ". Через Tor-мосты "
+                    + (kbps <= 0 ? "скорость не измерилась" : Prefs.speedText(kbps) + " — ниже порога")
+                    + " (" + Prefs.minSpeedText(this) + ")";
+            Log.w(TAG, lastError);
+            TorTunnel.stop(this);
+            currentMode = MODE_XRAY;
+            return false;
+        }
+
+        // TUN создаём только теперь, когда резервный канал доказанно живой.
+        teardownTunnel();
+        tun = establishTun(TorTunnel.DNS);
+        if (tun == null) {
+            TorTunnel.stop(this);
+            lastError = why + ". Не удалось создать TUN (VPN не разрешён?)";
+            currentMode = MODE_XRAY;
+            return false;
+        }
+        torMode = true;
+        currentMode = MODE_TOR;
+        localSocksPort = TorTunnel.SOCKS_PORT;
+        currentConfig = null;
+        currentSocksPort = TorTunnel.SOCKS_PORT;
+        currentDetail = "Tor-мосты · " + Prefs.speedText(kbps);
+        startTunnel(TorTunnel.SOCKS_PORT, true);
+        running.set(true);
+        acquireWakeLock();
+        startMonitor();
+        sendStatus("on", currentDetail);
+        Log.i(TAG, "резервный режим включён: " + currentDetail);
+        return true;
+    }
+
+    /** Погасить hev и TUN, но не трогать сервис и ядро (для перехода в другой режим). */
+    private void teardownTunnel() {
+        try {
+            new TProxyService().stopTunnel();
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (tun != null) tun.close();
+        } catch (Exception ignored) {
+        }
+        tun = null;
     }
 
     /** Кандидаты из пула: сверху самые быстрые. */
@@ -373,6 +508,15 @@ public class BypassVpnService extends VpnService {
     // ------------------------------------------------------------------ TUN и hev
 
     private ParcelFileDescriptor establishTun() {
+        return establishTun(null);
+    }
+
+    /**
+     * @param dnsOverride если задан — этот DNS отдаём системе вместо настроенного.
+     *                    В режиме Tor это адрес mapdns из hev: запросы перехватываются
+     *                    на месте, а имена резолвит сам Tor (UDP у Tor нет).
+     */
+    private ParcelFileDescriptor establishTun(String dnsOverride) {
         Builder builder = new Builder();
         builder.setSession("ОбходБелыхСписков");
         builder.addAddress("10.10.10.10", 32);
@@ -381,7 +525,7 @@ public class BypassVpnService extends VpnService {
             builder.addAddress("fd00::1", 128);
             builder.addRoute("::", 0);
         }
-        String dns = Prefs.vpnDns(this);
+        String dns = dnsOverride != null ? dnsOverride : Prefs.vpnDns(this);
         if (dns != null && !dns.trim().isEmpty()) {
             for (String d : dns.split("[,;\\s]+")) {
                 if (!d.trim().isEmpty()) builder.addDnsServer(d.trim());
@@ -398,10 +542,23 @@ public class BypassVpnService extends VpnService {
         return builder.establish();
     }
 
-    private void startTunnel(final int socksPort) {
+    /**
+     * @param mapdns true — включить перехват DNS (режим Tor): запросы к {@link TorTunnel#DNS}
+     *                hev обрабатывает сам и отдаёт «fake IP», а имена резолвит удалённая
+     *                сторона SOCKS (то есть Tor) при подключении.
+     */
+    private void startTunnel(final int socksPort, boolean mapdns) {
         if (tun == null) throw new IllegalStateException("TUN не создан");
         final String yaml = "tunnel:\n" +
                 "  mtu: 8500\n" +
+                (mapdns
+                        ? "mapdns:\n" +
+                          "  address: " + TorTunnel.DNS + "\n" +
+                          "  port: 53\n" +
+                          "  network: " + TorTunnel.NETWORK + "\n" +
+                          "  netmask: " + TorTunnel.NETMASK + "\n" +
+                          "  cache-size: 10000\n"
+                        : "") +
                 "misc:\n" +
                 "  task-stack-size: 81920\n" +
                 "socks5:\n" +
@@ -459,7 +616,7 @@ public class BypassVpnService extends VpnService {
     private boolean checkAlive() {
         List<String> urls = Prefs.healthUrls(this);
         if (urls.isEmpty()) return true;
-        int ok = NetChecker.countAliveThroughSocks(urls, "127.0.0.1", XRAY_PORT, 6000);
+        int ok = NetChecker.countAliveThroughSocks(urls, "127.0.0.1", localSocksPort, 6000);
         if (ok == 0) {
             Log.w(TAG, "канал не отвечает ни на одну из " + urls.size() + " целей проверки");
         }
@@ -470,6 +627,7 @@ public class BypassVpnService extends VpnService {
     private void switchToNext() {
         List<ProxyConfig> list = connectCandidates(6);
         String currentRaw = currentConfig != null ? currentConfig.raw : "";
+        boolean wasTor = torMode;
         int tried = 0;
         for (ProxyConfig cfg : list) {
             if (stopRequested.get()) return;
@@ -478,10 +636,29 @@ public class BypassVpnService extends VpnService {
             tried++;
             sendStatus("connecting", "Переключаюсь: " + truncate(cfg.name, 42) + "…");
             if (activate(cfg, false)) {
+                if (wasTor) {
+                    // Из резервного Tor обратно на конфиг: hev смотрел в 9050 — переводим
+                    // на локальный SOCKS ядра, иначе туннель остался бы на Tor.
+                    TorTunnel.stop(this);
+                    torMode = false;
+                    currentMode = MODE_XRAY;
+                    localSocksPort = XRAY_PORT;
+                    teardownTunnel();
+                    tun = establishTun();
+                    if (tun == null) {
+                        fail("Не удалось создать TUN после переключения");
+                        return;
+                    }
+                    startTunnel(XRAY_PORT, false);
+                }
+                currentMode = MODE_XRAY;
+                localSocksPort = XRAY_PORT;
                 sendStatus("on", currentDetail);
                 return;
             }
         }
+        // Ни один конфиг не поднялся: пробуем резервный Tor, иначе — честная ошибка.
+        if (torMode || tryTorFallback("Канал не отвечает, других рабочих конфигов нет")) return;
         sendStatus("error", "Канал не отвечает, других рабочих конфигов в пуле нет. "
                 + "Нажмите «Собрать пул».");
     }
@@ -515,6 +692,13 @@ public class BypassVpnService extends VpnService {
             XrayEngine.stop();
         } catch (Throwable ignored) {
         }
+        if (torMode) {
+            torMode = false;
+            TorTunnel.stop(this);
+        }
+        currentMode = MODE_XRAY;
+        localSocksPort = XRAY_PORT;
+        currentSocksPort = -1;
         stopDesync();
         try {
             if (tun != null) tun.close();
@@ -642,6 +826,7 @@ public class BypassVpnService extends VpnService {
         i.setPackage(getPackageName());
         i.putExtra(EXTRA_STATE, state);
         i.putExtra(EXTRA_DETAIL, detail);
+        i.putExtra(EXTRA_MODE, currentMode);
         sendBroadcast(i);
     }
 

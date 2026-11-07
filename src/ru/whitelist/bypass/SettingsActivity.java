@@ -40,7 +40,8 @@ public class SettingsActivity extends Activity {
             editGateTimeout, editStrategy, editVpnDns, editMonitor, editSwitchTimeout,
             editTorBridges, editTorExtra, editPingTargets, editHealthUrls, editLanes,
             editDpiSources;
-    private Switch swDesync, swIpv6, swAutoSwitch, swBoot, swEmbedded, swDpiAutotune;
+    private Switch swDesync, swIpv6, swAutoSwitch, swBoot, swEmbedded, swDpiAutotune,
+            swTorFallback;
 
     private int dp(int v) {
         return (int) (v * getResources().getDisplayMetrics().density);
@@ -48,6 +49,7 @@ public class SettingsActivity extends Activity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        Prefs.migrate(this);
         super.onCreate(savedInstanceState);
 
         ScrollView scroll = new ScrollView(this);
@@ -76,11 +78,13 @@ public class SettingsActivity extends Activity {
         root.addView(editSpeedUrls);
 
         editGateTimeout = numberField(String.valueOf(Prefs.gateTimeoutMs(this)));
-        label("Сколько ждём на один замер, мс");
+        label("Сколько ждём на один замер, мс (1500 по умолчанию)");
         root.addView(editGateTimeout);
 
         note("Замер идёт на маленьких файлах (32 и 128 КБ) и в несколько дорожек параллельно: "
-                + "канал видно по первым килобайтам, а ждать мегабайты незачем.");
+                + "канал видно по первым килобайтам, а ждать мегабайты незачем. 1500 мс "
+                + "хватает: рабочий конфиг отдаёт данные сразу, а «вдруг разгонится» — "
+                + "это ожидание, которое растягивало сбор пула.");
         note("Скорость важнее пинга: пул сортируется по КБ/с, подключение начинается "
                 + "с самого быстрого. Конфиги медленнее порога не попадают в пул вообще.");
 
@@ -90,7 +94,7 @@ public class SettingsActivity extends Activity {
         label("Потоков пинга одновременно");
         root.addView(editThreads);
         editTimeout = numberField(String.valueOf(Prefs.pingTimeoutMs(this)));
-        label("Таймаут пинга, мс (2500 по умолчанию; рабочий сервер может пинговаться до 1000 мс)");
+        label("Таймаут пинга, мс (1000 по умолчанию)");
         root.addView(editTimeout);
 
         editPingTargets = multiField(Prefs.join(Prefs.pingTargets(this)), 5);
@@ -101,7 +105,9 @@ public class SettingsActivity extends Activity {
         label("5 мест проверки канала через туннель (URL, по одному на строку)");
         root.addView(editHealthUrls);
 
-        note("Пинг не решает «рабочий/не рабочий»: он только отсекает мёртвое. Конфиг, "
+        note("1000 мс — это фильтр «более-менее работающих»: то, что пингуется дольше, "
+                + "всё равно не годится для обхода. Пинг не решает «рабочий/не рабочий»: "
+                + "он только отсекает мёртвое. Конфиг, "
                 + "прошедший TLS-handshake, дополнительно проверяется обычным TCP — "
                 + "поэтому Reality и чужие SNI не отбрасываются зря. Рабочесть и скорость "
                 + "подтверждаются реальной загрузкой через поднятое ядро Xray.");
@@ -235,9 +241,13 @@ public class SettingsActivity extends Activity {
         swBoot = switchRow("Подключаться при загрузке", Prefs.bootConnect(this));
 
         // --- Tor ---
-        section("Tor (только для скачивания списков)");
-        note("Tor используется в единственном случае: прямые источники и jsDelivr не "
-                + "отдали списки. Как режим обхода он не применяется.");
+        section("Tor: мосты, резервный канал и списки");
+        note("Tor нужен в двух случаях: (1) прямые источники и jsDelivr не отдали списки — "
+                + "тогда Tor единственная дорога к ним; (2) ни один VPN-конфиг не отвечает — "
+                + "тогда трафик идёт через мосты (медленно, но связь есть). Обычным режимом "
+                + "Tor не включается.");
+        swTorFallback = switchRow("Если VPN не отвечает — пускать трафик через Tor-мосты",
+                Prefs.torFallback(this));
         editTorBridges = multiField(Prefs.torBridges(this), 4);
         label("Мосты (пусто — встроенные Vanilla)");
         root.addView(editTorBridges);
@@ -389,7 +399,7 @@ public class SettingsActivity extends Activity {
         root.addView(browser);
 
         TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.1.1\n"
+        footer.setText("Обход Белых Списков 0.1.2\n"
                 + versionLine() + "\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");
         footer.setTextColor(TEXT_DIM);
@@ -491,9 +501,9 @@ public class SettingsActivity extends Activity {
         e.putString(Prefs.SOURCES, normalizeLines(editSources.getText().toString()));
         e.putString(Prefs.SPEED_URLS, normalizeLines(editSpeedUrls.getText().toString()));
         e.putInt(Prefs.MIN_SPEED_KBIT, Prefs.clamp(parseInt(editMinSpeed, 128), 8, 160000));
-        e.putInt(Prefs.GATE_TIMEOUT_MS, Prefs.clamp(parseInt(editGateTimeout, 6000), 2000, 20000));
+        e.putInt(Prefs.GATE_TIMEOUT_MS, Prefs.clamp(parseInt(editGateTimeout, 1500), 800, 20000));
         e.putInt(Prefs.PING_THREADS, Prefs.clamp(parseInt(editThreads, 60), 1, 200));
-        e.putInt(Prefs.PING_TIMEOUT_MS, Prefs.clamp(parseInt(editTimeout, 2500), 300, 15000));
+        e.putInt(Prefs.PING_TIMEOUT_MS, Prefs.clamp(parseInt(editTimeout, 1000), 300, 15000));
         e.putInt(Prefs.SPEED_LANES, Prefs.clamp(parseInt(editLanes, 3), 1, 4));
         e.putString(Prefs.PING_TARGETS, normalizeLines(editPingTargets.getText().toString()));
         e.putString(Prefs.HEALTH_URLS, normalizeLines(editHealthUrls.getText().toString()));
@@ -510,6 +520,7 @@ public class SettingsActivity extends Activity {
         e.putBoolean(Prefs.AUTO_SWITCH, swAutoSwitch.isChecked());
         e.putBoolean(Prefs.BOOT_CONNECT, swBoot.isChecked());
         e.putBoolean(Prefs.EMBEDDED, swEmbedded.isChecked());
+        e.putBoolean(Prefs.TOR_FALLBACK, swTorFallback.isChecked());
         e.apply();
     }
 

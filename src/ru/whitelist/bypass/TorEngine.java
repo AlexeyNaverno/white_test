@@ -89,8 +89,14 @@ public final class TorEngine {
      */
     private static List<String> bridges(Context ctx) {
         List<String> base = candidateBridges(ctx);
+        // ВАЖНО: ranked() возвращает null, когда замеров мостов ещё нет (или рабочих
+        // меньше двух). Раньше здесь стояло ranked.isEmpty() — и первый же запуск Tor
+        // до кнопки «Проверить мосты» падал с NullPointerException
+        // («Attempt to invoke interface method List.isEmpty() on a null object reference»),
+        // из-за чего сбор пула обрывался с ошибкой.
         List<String> ranked = ranked(base, Prefs.torBridgeRank(ctx));
-        return ranked.isEmpty() ? trimmed(base, 30) : ranked;
+        if (ranked == null || ranked.isEmpty()) return trimmed(base, 30);
+        return ranked;
     }
 
     /** Мосты как они заведены: свои из настроек, иначе встроенные. Без сортировки. */
