@@ -277,32 +277,56 @@ src/ru/whitelist/bypass/   исходники (Java), точки входа: Mai
                            Ui — отступы под системные панели (Android 15+ рисует под ними)
 res/                       ресурсы интерфейса, иконка, темы
 assets/fallback/           небольшой встроенный резерв конфигов (первый запуск)
-jniLibs/<abi>/             готовые нативные библиотеки: ByeDPI, hev-socks5-tunnel, Tor
-tools/fetch_deps.sh|.bat   скачивание зависимостей сборки (AAR/JAR, ~75 МБ)
-build.sh / build.bat       сборка APK без Gradle (aapt2 + javac + d8 + apksigner)
+native/                    нативные исходники и сборка libbyedpi.so (ndk-build):
+                           jni.c — JNI-обёртка, upstream/byedpi — ciadpi,
+                           upstream/hev-socks5-tunnel — tun2socks (+ lwip, yaml),
+                           libv2ray — Xray-core (AndroidLibXrayLite) для сборки AAR
+gradle.properties          версия приложения (versionCode/versionName) — одно место для
+                           Gradle, CI и F-Droid-рецепта
+build.gradle / settings.gradle   сборка Gradle (единственная, кастомных скриптов нет)
+tools/                     fetch-libv2ray.sh (готовый AAR) и build-libv2ray.sh (из исходников)
+fastlane/metadata/android/ описания и картинки для F-Droid (ru-RU, en-US)
+metadata/                  черновик рецепта для fdroiddata
 .github/workflows/         CI: сборка APK и артефакты релиза
 releases/                  тексты релизов по версиям
-AndroidManifest.xml        манифест, версия, компоненты
 ```
 
-CI собирает APK на каждый тег `v*`: ставит JDK и Android SDK, скачивает зависимости,
-проверяет версию, подпись и содержимое APK и прикладывает к релизу сам APK, `apk.sha256`
-и `build-report.txt` (badging, список файлов, сертификат, размер).
+CI собирает APK на каждый тег `v*`: ставит JDK 17, Android SDK 37.1 (build-tools 37.0.0) и NDK 26.3, собирает
+нативные библиотеки из исходников, проверяет версию, подпись и содержимое APK и прикладывает
+к релизу сам APK, `apk.sha256` и `build-report.txt` (badging, список файлов, сертификат, размер).
 
 ## Сборка из исходников
 
-Нужны JDK 17+, Android SDK (platform 36, build-tools 36.0.0) и ~75 МБ зависимостей:
+Нужны JDK 17+, Android SDK (platform 37.1, build-tools 37.0.0), Android NDK 26.3
+и Gradle 9.8.2 (AGP 9.4.1 подтянется сам). Platform 37.1 обязательна: `libv2ray.aar`
+и `tor-android` собраны против неё, `compileSdk` меньше их не примет.
+Нативные библиотеки собираются из исходников, поэтому предсобранных `.so` в репозитории нет.
 
 ```bash
-tools/fetch_deps.sh /путь/к/deps          # Windows: tools\fetch_deps.bat deps
-./build.sh /путь/к/android-sdk /путь/к/deps
-#   → WhitelistBypass.apk
-#   ABIS="arm64-v8a" ./build.sh …        (по умолчанию armeabi-v7a + arm64-v8a)
+git clone --recursive https://github.com/AlexeyNaverno/white_test.git
+cd white_test
+tools/fetch-libv2ray.sh        # готовый libv2ray.aar (быстрый путь)
+#   или: tools/build-libv2ray.sh — собрать AAR из исходников (Go + gomobile, F-Droid-путь)
+gradle assembleRelease
+#   → build/outputs/apk/release/WhitelistBypass-release.apk
+#   abi: gradle assembleRelease -Pabis=arm64-v8a
 ```
 
-Windows: `build.bat` (SDK ожидается в `C:\SDK`, переменные `ABIS`, `DEPS`).
-Зависимости: `libv2ray.aar` (AndroidLibXrayLite), `tor-android.aar`, `jtorctl`,
-`kotlin-stdlib`, `localbroadcastmanager`. Нативные `libbyedpi.so` уже лежат в `jniLibs/`.
+Зависимости: `libv2ray.aar` (Xray-core, `native/libv2ray`), `tor-android` и `jtorctl`
+(Maven Central), `localbroadcastmanager` (Google), `kotlin-stdlib` (Maven Central).
+`libbyedpi.so` собирается ndk-build из `native/` (ciadpi + hev-socks5-tunnel + JNI-обёртка).
+
+## F-Droid
+
+Подготовка к публикации в F-Droid: `fastlane/metadata/android/` (описания ru-RU и en-US,
+иконка, скриншоты, changelog), `metadata/ru.whitelist.bypass.yml` (черновик рецепта для
+fdroiddata) и `F-DROID.md` с разбором соответствия Inclusion Policy. Коротко:
+
+- лицензия GPL-3.0 — соответствует;
+- **предсобранных бинарников в дереве нет**: `libbyedpi.so` собирается из исходников
+  (сабмодули), `libv2ray.aar` — либо готовый (для своих сборок), либо из исходников;
+- сборка стандартная, Gradle — без кастомных shell-скриптов;
+- описания и changelog лежат в fastlane-структуре.
 
 ## 🔖 Лицензия
 

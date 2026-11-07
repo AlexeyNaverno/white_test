@@ -1,5 +1,22 @@
+# артефакты сборки
 build/
-deps/
-*.apk
-*.iml
 .gradle/
+local.properties
+*.apk
+*.idsig
+*.iml
+.idea/
+
+# готовые зависимости сборки (не хранятся в репозитории)
+deps/
+libs/
+
+# native: ndk-build и собранные библиотеки
+native/obj/
+native/libs/
+jniLibs/
+
+# опубликованные AAR/JAR и временные файлы
+*.aar
+!native/**/*.aar
+*.log

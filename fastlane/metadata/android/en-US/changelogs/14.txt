@@ -1,0 +1,10 @@
+• Settings presets: "Standard" (DPI bypass on), "Wi-Fi" (no DPI, fastest measuring)
+  and "White lists" (16 kbit/s threshold, white-list sources only). Custom presets are
+  saved from an imported .json and stay in the list.
+• DPI bypass of the line and automatic strategy selection are enabled by default; the
+  default strategy is complex fragmentation.
+• The "working config" threshold is lowered to 32 kbit/s, measuring window is 3000 ms,
+  ping timeout 2000 ms, monitor switches the config after 15 s.
+• Channel checks use lightweight generate_204 endpoints: reachability is instant, while
+  KB/s is measured on real config lists.
+• 204 responses are no longer reported as a false "no data".

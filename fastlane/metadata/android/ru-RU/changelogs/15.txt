@@ -1,0 +1,7 @@
+• Сборка переведена на Gradle (Gradle 8.9 + AGP 8.7.3); версия приложения — в gradle.properties.
+• Все нативные библиотеки собираются из исходников: предсобранный libbyedpi.so удалён,
+  ciadpi + hev-socks5-tunnel + JNI-обёртка лежат в native/ и собираются ndk-build.
+• Xray-core: сабмодуль native/libv2ray и скрипт сборки AAR через Go/gomobile.
+• Зависимости из Maven Central и Google Maven вместо скачивания файлов скриптом.
+• Метаданные F-Droid: описания ru-RU и en-US, иконка, скриншоты, changelog, черновик
+  рецепта и разбор соответствия Inclusion Policy (F-DROID.md).

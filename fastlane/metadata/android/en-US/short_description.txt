@@ -1,0 +1,1 @@
+VPN on public configs: speed over ping, Tor fallback, DPI bypass

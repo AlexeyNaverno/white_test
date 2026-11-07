@@ -1,0 +1,7 @@
+• Build system moved to Gradle (Gradle 8.9 + AGP 8.7.3); app version lives in gradle.properties.
+• All native libraries are built from source: the prebuilt libbyedpi.so is gone, ciadpi +
+  hev-socks5-tunnel + a JNI wrapper live in native/ and are built with ndk-build.
+• Xray-core: native/libv2ray submodule plus an AAR build script (Go/gomobile).
+• Dependencies come from Maven Central and Google Maven instead of being downloaded by a script.
+• F-Droid metadata: ru-RU and en-US descriptions, icon, screenshots, changelog, a draft build
+  recipe and an Inclusion Policy compliance review (F-DROID.md).

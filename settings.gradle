@@ -1,0 +1,19 @@
+// Один модуль: исходники приложения лежат в src/, res/, assets/ — как было до перехода
+// на Gradle, поэтому дерево осталось прежним, а сборка стала стандартной для F-Droid.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = 'WhitelistBypass'

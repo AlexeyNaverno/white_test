@@ -14,88 +14,135 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          # нативные исходники (ciadpi, hev-socks5-tunnel, Xray-core) — git-сабмодули
+          submodules: recursive
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Android SDK (platform 36 + build-tools 36.0.0)
-        run: |
-          SDK="$HOME/android-sdk"
-          mkdir -p "$SDK/cmdline-tools"
-          curl -fsSL --retry 3 -o /tmp/cmdtools.zip \
-            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q /tmp/cmdtools.zip -d "$SDK/cmdline-tools"
-          mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
-          chmod -R +x "$SDK/cmdline-tools/latest/bin" "$SDK/cmdline-tools/latest/lib"
-          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --licenses > /dev/null
-          "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" \
-            "platforms;android-36" "build-tools;36.0.0"
-          echo "ANDROID_SDK=$SDK" >> "$GITHUB_ENV"
+      # Свежий cmdline-tools обязателен: старый индекс SDK не знает пакета
+      # platforms;android-37.0 (он нужен из-за aar-metadata зависимостей).
+      - name: Android SDK (platform 37.1, build-tools 37.0.0)
+        uses: android-actions/setup-android@v4
+        with:
+          log-accepted-android-sdk-licenses: false
+          cmdline-tools-version: '14742923'
+          packages: 'platforms;android-37.1 platforms;android-37.0 build-tools;37.0.0 platform-tools'
 
-      - name: Зависимости (libv2ray / tor-android / jtorctl / kotlin-stdlib / lbc)
+      - name: Android NDK 26.3
         run: |
-          bash tools/fetch_deps.sh "$GITHUB_WORKSPACE/deps"
-          ls -la deps
+          # Один путь к SDK: AGP падает, если ANDROID_HOME и ANDROID_SDK_ROOT разные.
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --channel=0 --install "ndk;26.3.11579264"
+          echo "ANDROID_SDK=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> "$GITHUB_ENV"
+          ls "$ANDROID_HOME/platforms"
 
-      - name: Версия из манифеста
+      - name: Gradle 9.8.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.8.2'
+
+      - name: Xray-core (libv2ray.aar)
         run: |
-          V=$(grep -oP 'android:versionName="\K[^"]+' AndroidManifest.xml)
+          bash tools/fetch-libv2ray.sh
+          ls -la libs
+
+      - name: Версия из gradle.properties
+        run: |
+          V=$(grep -oP '^appVersionName=\K.*' gradle.properties)
           echo "VERSION=$V" >> "$GITHUB_ENV"
           echo "Версия: $V"
 
-      - name: Сборка APK
+      - name: Сборка APK (Gradle + NDK)
         run: |
           set -o pipefail
-          ABIS="armeabi-v7a arm64-v8a" bash build.sh "$ANDROID_SDK" "$GITHUB_WORKSPACE/deps" 2>&1 | tee /tmp/build.log
+          gradle --no-daemon assembleRelease 2>&1 | tee /tmp/build.log
 
-      - name: Отладка (лог сборки в отдельную ветку)
+      - name: Лог сборки в артефакт (при падении)
         if: failure()
         run: |
-          tail -c 20000 /tmp/build.log > /tmp/tail.txt || true
-          git config user.name "ci"; git config user.email "ci@localhost"
-          mkdir -p ci-log && cp /tmp/tail.txt ci-log/build.log
-          git checkout -b "ci-log-${{ github.run_id }}"
-          git add ci-log/build.log
-          git commit -m "ci log ${{ github.run_id }}"
-          git push origin "HEAD:ci-log-${{ github.run_id }}"
+          tail -c 60000 /tmp/build.log > build-log.txt 2>/dev/null || true
+          echo "### Последние строки лога" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 40 /tmp/build.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          # Аннотации видны в `gh run view` — логи иначе недоступны из API
+          awk '/What went wrong/{flag=1} flag{print; n++} n>18{exit}' /tmp/build.log > /tmp/why.txt || true
+          [ -s /tmp/why.txt ] || tail -n 20 /tmp/build.log > /tmp/why.txt
+          while IFS= read -r line; do
+            [ -n "$line" ] && echo "::error title=build::$(echo "$line" | tr -s ' ' | cut -c1-900)"
+          done < /tmp/why.txt
+      - name: Загрузить лог сборки
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: build-log-${{ github.run_id }}
+          path: build-log.txt
+          if-no-files-found: ignore
 
       - name: Проверка артефакта (жёсткие ассерты)
         run: |
-          set -euo pipefail
+          set -uo pipefail
           BT=$(ls -d "$ANDROID_SDK"/build-tools/* | sort -V | tail -1)
           export PATH="$BT:$PATH"
-          mv WhitelistBypass.apk "WhitelistBypass-$VERSION.apk"
+          FAIL=0
+          check() { # check "<что>" "<команда>"
+            desc="$1"; shift
+            if bash -c "$*"; then echo "OK: $desc"
+            else echo "::error title=assert::$desc"; FAIL=1; fi
+          }
+          check_q() { # check_q "<что>" "<строка>" "<команда с пайпом>"
+            desc="$1"; pat="$2"; shift 2
+            if bash -c "$*" | grep -q -- "$pat"; then echo "OK: $desc"
+            else echo "::error title=assert::$desc (нет '$pat')"; FAIL=1; fi
+          }
+
+          SRC_APK=$(find build/outputs/apk/release -name '*.apk' | head -1)
+          [ -n "${SRC_APK:-}" ] || { echo "::error::Gradle не собрал APK"; find build/outputs -maxdepth 4 -type f | head -20; exit 1; }
+          echo "::notice title=apk::Gradle собрал $(basename "$SRC_APK")"
           APK="WhitelistBypass-$VERSION.apk"
+          mv "$SRC_APK" "$APK"
           sha256sum "$APK" | tee apk.sha256
+
+          aapt2 dump badging "$APK" > /tmp/badging.txt 2>&1 || true
+          unzip -l "$APK" > /tmp/apk-list.txt 2>&1 || true
+          apksigner verify --print-certs "$APK" > /tmp/certs.txt 2>&1 || true
+
           {
             echo "### aapt2 badging"
-            aapt2 dump badging "$APK" | grep -E "^package:|application-label|sdkVersion|targetSdkVersion|native-code"
+            grep -E "^package:|application-label|sdkVersion|targetSdkVersion|native-code" /tmp/badging.txt || true
             echo
-            echo "### содержимое APK (фрагмент)"
-            unzip -l "$APK" | grep -E "classes.dex|lib/.*\\.so|resources.arsc|AndroidManifest" | awk '{print $1, $4}'
+            echo "### нативные библиотеки в APK"
+            grep -E "^\s+[0-9]+.*lib/" /tmp/apk-list.txt || true
             echo
             echo "### подпись"
-            apksigner verify --print-certs "$APK" | grep -E "Verifies|Signer #1 certificate (DN|SHA-256)"
+            grep -E "Verifies|Signer #1 certificate (DN|SHA-256)" /tmp/certs.txt || true
             echo
             echo "### размер"
             du -h "$APK"
           } 2>&1 | tee build-report.txt
-          aapt2 dump badging "$APK" | grep -q "package: name='ru.whitelist.bypass'"
-          aapt2 dump badging "$APK" | grep -q "versionName='$VERSION'"
-          apksigner verify --print-certs "$APK" \
-            | grep -qi "de18cb65d3aadc1f7b53372fe896565df2b40f51b9238e4ccef898206dc8d515" \
-            || { echo "::error::подпись не совпадает с debug.keystore из репозитория"; exit 1; }
-          unzip -l "$APK" | grep -q "classes.dex"
-          unzip -l "$APK" | grep -q "lib/arm64-v8a/libgojni.so"
-          unzip -l "$APK" | grep -q "lib/arm64-v8a/libtor.so"
-          unzip -l "$APK" | grep -q "lib/arm64-v8a/libbyedpi.so"
-          sha256sum -c apk.sha256
-          rm -f *.idsig
 
-      - uses: actions/upload-artifact@v4
+          check_q "package name" "package: name='ru.whitelist.bypass'"        "aapt2 dump badging '$APK'"
+          check_q "versionName" "versionName='$VERSION'"                     "aapt2 dump badging '$APK'"
+          check_q "подпись debug.keystore" "de18cb65d3aadc1f7b53372fe896565df2b40f51b9238e4ccef898206dc8d515" "apksigner verify --print-certs '$APK'"
+          check_q "classes.dex"            "classes.dex"                     "unzip -l '$APK'"
+          check_q "libbyedpi.so"           "lib/arm64-v8a/libbyedpi.so"      "unzip -l '$APK'"
+          check_q "libgojni.so (Xray)"     "lib/arm64-v8a/libgojni.so"       "unzip -l '$APK'"
+          check_q "libtor.so"              "lib/arm64-v8a/libtor.so"         "unzip -l '$APK'"
+          check_q "упакованный ресурс geoip" "assets/geoip.dat"              "unzip -l '$APK'"
+          check sha256 "sha256sum -c apk.sha256"
+          rm -f *.idsig
+          [ "$FAIL" = 0 ] || { echo "::error::ассерты не пройдены"; exit 1; }
+
+      - uses: actions/upload-artifact@v5
+        if: always()
         with:
           name: WhitelistBypass-${{ env.VERSION }}
           path: |
@@ -118,7 +165,7 @@ jobs:
           echo "Релиз: $TITLE"
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && gh release delete "$GITHUB_REF_NAME" -y || true
           { tail -n +2 "$NOTES"
-            printf '\n### Сборка\n\nGitHub Actions, коммит `%s`: JDK 17, Android SDK 36 (build-tools 36.0.0), подпись debug-ключом из репозитория.\n\n' "$GITHUB_SHA"
+            printf '\n### Сборка\n\nGitHub Actions, коммит `%s`: JDK 17, Android SDK 37.1 (build-tools 37.0.0), NDK 26.3, Gradle 9.8.2, AGP 9.4.1; подпись debug-ключом из репозитория.\n\n' "$GITHUB_SHA"
             printf '```\n'; cat build-report.txt; printf '```\n'
           } > /tmp/body.md
           gh release create "$GITHUB_REF_NAME" \

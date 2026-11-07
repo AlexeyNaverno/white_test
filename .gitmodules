@@ -1,0 +1,9 @@
+[submodule "native/upstream/byedpi"]
+	path = native/upstream/byedpi
+	url = https://github.com/hufrea/byedpi.git
+[submodule "native/upstream/hev-socks5-tunnel"]
+	path = native/upstream/hev-socks5-tunnel
+	url = https://github.com/heiher/hev-socks5-tunnel.git
+[submodule "native/libv2ray"]
+	path = native/libv2ray
+	url = https://github.com/2dust/AndroidLibXrayLite.git
