@@ -27,6 +27,11 @@ public class SettingsActivity extends Activity {
 
     private static final int REQ_EXPORT = 1001;
     private static final int REQ_IMPORT = 1002;
+    private static final int REQ_EXPORT_SETTINGS = 1003;
+    private static final int REQ_IMPORT_SETTINGS = 1004;
+    private static final int REQ_SAVE_CONSOLE = 1005;
+    /** После импорта настроек нельзя сохранять то, что ещё нарисовано на экране. */
+    private boolean skipSaveOnPause;
     /** Текст пула для экспорта: пишем в файл после того, как пользователь выбрал место. */
     private String pendingExport;
     private TextView importLog;
@@ -38,8 +43,8 @@ public class SettingsActivity extends Activity {
 
     private EditText editSources, editSpeedUrls, editMinSpeed, editThreads, editTimeout,
             editGateTimeout, editStrategy, editVpnDns, editMonitor, editSwitchTimeout,
-            editTorBridges, editTorExtra, editPingTargets, editHealthUrls, editLanes,
-            editDpiSources;
+            editTorBridges, editTorExtra, editTorBridgeWait, editPingTargets, editHealthUrls,
+            editLanes, editDpiSources;
     private Switch swDesync, swIpv6, swAutoSwitch, swBoot, swEmbedded, swDpiAutotune,
             swTorFallback;
 
@@ -82,9 +87,10 @@ public class SettingsActivity extends Activity {
         root.addView(editGateTimeout);
 
         note("Замер идёт на маленьких файлах (32 и 128 КБ) и в несколько дорожек параллельно: "
-                + "канал видно по первым килобайтам, а ждать мегабайты незачем. 1500 мс "
-                + "хватает: рабочий конфиг отдаёт данные сразу, а «вдруг разгонится» — "
-                + "это ожидание, которое растягивало сбор пула.");
+                + "канал видно по первым килобайтам, а ждать мегабайты незачем. Лимит — это окно "
+                + "самого замера: оно отсчитывается от ПЕРВОГО полученного байта, а на "
+                + "соединение и TLS даётся отдельный запас сверху. Поэтому 1500 мс не "
+                + "превращаются в «нет данных» на медленном старте.");
         note("Скорость важнее пинга: пул сортируется по КБ/с, подключение начинается "
                 + "с самого быстрого. Конфиги медленнее порога не попадают в пул вообще.");
 
@@ -262,9 +268,17 @@ public class SettingsActivity extends Activity {
         label("Дополнительные строки torrc");
         root.addView(editTorExtra);
 
+        label("Лимит ожидания одного моста, секунд (5–120)");
+        editTorBridgeWait = numberField(String.valueOf(Prefs.torBridgeWaitSec(this)));
+        editTorBridgeWait.setInputType(InputType.TYPE_CLASS_NUMBER);
+        root.addView(editTorBridgeWait);
+        note("По умолчанию 10 секунд. Живой мост поднимается за секунды; если за лимит "
+                + "не поднялся — проверка идёт к следующему, а не висит на нём. "
+                + "Больше 30 с ставить смысла нет: это уже признак заблокированного моста.");
+
         note("Проверка мостов идёт по одному мосту: поднимаем Tor, качаем тестовую страницу, "
                 + "запоминаем скорость. Дальше и в приложении, и в браузере мосты "
-                + "используются начиная с самого быстрого. Долго: до нескольких минут.");
+                + "используются начиная с самого быстрого. Время = мостов × лимит ожидания.");
 
         final TextView torOut = new TextView(this);
         torOut.setTextColor(TEXT_DIM);
@@ -354,6 +368,65 @@ public class SettingsActivity extends Activity {
         });
         root.addView(importPool);
 
+        // --- настройки файлом ---
+        section("Настройки файлом: .json");
+        note("Экспорт выгружает ВСЕ настройки одним .json: список источников, пороги, таймауты, "
+                + "мосты, DPI-стратегии. Такой файл удобно править текстом (в том числе через "
+                + "LLM) и загружать обратно. Импорт применяет только известные ключи и только "
+                + "с тем же типом значения — испорченный файл приложение не сломает.");
+        Button exportSettings = smallButton("Экспорт всех настроек в .json");
+        exportSettings.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                savePrefs();
+                pendingExport = SettingsIo.exportJson(SettingsActivity.this);
+                Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("application/json");
+                intent.putExtra(Intent.EXTRA_TITLE, "whitelist-settings.json");
+                try {
+                    startActivityForResult(intent, REQ_EXPORT_SETTINGS);
+                } catch (Exception e) {
+                    toast("Нет приложения для сохранения файла");
+                }
+            }
+        });
+        root.addView(exportSettings);
+
+        Button importSettings = smallButton("Импорт настроек из .json");
+        importSettings.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("*/*");
+                try {
+                    startActivityForResult(intent, REQ_IMPORT_SETTINGS);
+                } catch (Exception e) {
+                    toast("Нет приложения для выбора файла");
+                }
+            }
+        });
+        root.addView(importSettings);
+
+        Button saveConsole = smallButton("Сохранить консоль в .json");
+        saveConsole.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                pendingExport = SettingsIo.consoleJson(SettingsActivity.this);
+                Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("application/json");
+                intent.putExtra(Intent.EXTRA_TITLE, "whitelist-console.json");
+                try {
+                    startActivityForResult(intent, REQ_SAVE_CONSOLE);
+                } catch (Exception e) {
+                    toast("Нет приложения для сохранения файла");
+                }
+            }
+        });
+        root.addView(saveConsole);
+        note("Консоль — это лог с главного экрана: пинг, замер, причины отказов, мосты. "
+                + "Файл содержит строки и склеенный текст, версию приложения и число конфигов "
+                + "в пуле.");
+
         // --- данные ---
         section("Данные");
         swEmbedded = switchRow("Встроенный резерв конфигов", Prefs.embeddedEnabled(this));
@@ -399,7 +472,7 @@ public class SettingsActivity extends Activity {
         root.addView(browser);
 
         TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.1.2\n"
+        footer.setText("Обход Белых Списков 0.1.3\n"
                 + versionLine() + "\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");
         footer.setTextColor(TEXT_DIM);
@@ -411,6 +484,7 @@ public class SettingsActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        if (skipSaveOnPause) return;  // только что импортировали файл: не затирать его экраном
         savePrefs();
     }
 
@@ -433,6 +507,39 @@ public class SettingsActivity extends Activity {
             }, "pool-export").start();
         } else if (requestCode == REQ_IMPORT) {
             startImport(uri);
+        } else if (requestCode == REQ_EXPORT_SETTINGS || requestCode == REQ_SAVE_CONSOLE) {
+            final boolean settings = requestCode == REQ_EXPORT_SETTINGS;
+            final String text = pendingExport;
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    final boolean ok = writeTo(uri, text);
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            toast(ok ? (settings ? "Настройки сохранены в .json"
+                                                 : "Консоль сохранена в .json")
+                                     : "Не удалось сохранить файл");
+                        }
+                    });
+                }
+            }, "json-export").start();
+        } else if (requestCode == REQ_IMPORT_SETTINGS) {
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    final String text = readAll(uri);
+                    final String result = text == null
+                            ? "Не удалось прочитать файл"
+                            : SettingsIo.importJson(SettingsActivity.this, text);
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            toast(result);
+                            if (text != null) {
+                                skipSaveOnPause = true;
+                                recreate();  // показать уже импортированные значения
+                            }
+                        }
+                    });
+                }
+            }, "json-import").start();
         }
     }
 
@@ -520,6 +627,8 @@ public class SettingsActivity extends Activity {
         e.putBoolean(Prefs.AUTO_SWITCH, swAutoSwitch.isChecked());
         e.putBoolean(Prefs.BOOT_CONNECT, swBoot.isChecked());
         e.putBoolean(Prefs.EMBEDDED, swEmbedded.isChecked());
+        e.putInt(Prefs.TOR_BRIDGE_WAIT_SEC,
+                Prefs.clamp(parseInt(editTorBridgeWait, 10), 5, 120));
         e.putBoolean(Prefs.TOR_FALLBACK, swTorFallback.isChecked());
         e.apply();
     }

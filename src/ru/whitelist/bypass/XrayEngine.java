@@ -29,9 +29,24 @@ public final class XrayEngine {
     private static CoreController controller;
     private static boolean envInitialized = false;
 
-    /** Транспорты, которые умеет текущее ядро. kcp/quic/domainsocket — не умеет. */
+    /**
+     * Транспорты, которые умеет ядро Xray 26.x И которые умеет строить это приложение.
+     *
+     * Важно: `raw` — новое имя tcp (Xray 1.8.4+), такие ссылки встречаются всё чаще.
+     * А `h2`/`http`/`h3` из Xray 26 удалены (остался XHTTP) — если пропустить их в ядро,
+     * оно отвечает «config error: infra/conf: HTTP transport ... removed», и в логе это
+     * выглядело как непонятная ошибка запуска. Такие конфиги отсекаем заранее и с причиной.
+     */
     private static final java.util.Set<String> NETWORKS = new java.util.HashSet<>(java.util.Arrays.asList(
-            "tcp", "ws", "grpc", "h2", "http", "httpupgrade", "xhttp", "splithttp"));
+            "raw", "tcp", "ws", "websocket", "grpc", "httpupgrade", "xhttp", "splithttp"));
+
+    /** Транспорты, удалённые из Xray 26 — ядро их не поднимет никогда. */
+    private static final java.util.Set<String> REMOVED_NETWORKS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "h2", "h3", "http", "quic"));
+
+    /** Транспорты, которые ядро умеет, но приложение не строит (нужны свои параметры). */
+    private static final java.util.Set<String> UNBUILDABLE_NETWORKS =
+            new java.util.HashSet<>(java.util.Arrays.asList("kcp", "mkcp", "hysteria", "masque", "xdrive"));
 
     /** Шифрование, которое умеет ядро. xtls из Xray убран, «none» — без TLS. */
     private static final java.util.Set<String> SECURITIES = new java.util.HashSet<>(java.util.Arrays.asList(
@@ -65,12 +80,36 @@ public final class XrayEngine {
         if (!cfg.supported) {
             return cfg.unsupportedReason != null ? cfg.unsupportedReason : "схема не поддерживается";
         }
+        if (cfg.host == null || cfg.host.trim().isEmpty()) return "адрес сервера не разобран";
+        if (cfg.port <= 0 || cfg.port > 65535) return "порт не разобран";
+
         Map<String, String> p = cfg.params();
         String network = firstNonEmpty(p.get("type"), "tcp").toLowerCase();
         String security = firstNonEmpty(p.get("security"),
                 "trojan".equals(cfg.scheme) ? "tls" : "none").toLowerCase();
         String flow = p.get("flow");
 
+        if ("vmess".equals(cfg.scheme)) {
+            // У vmess транспорт и TLS лежат ВНУТРИ base64-JSON, а не в параметрах ссылки:
+            // без этого «net»/«tls» из JSON не проверялись, и такой конфиг уходил в ядро,
+            // которое отвечало «config error» (например, на удалённом h2).
+            JSONObject v = vmessJson(cfg);
+            String id = v.optString("id");
+            if (id.isEmpty()) return "vmess: ссылка не разбирается (нет id)";
+            network = firstNonEmpty(p.get("type"), v.optString("net"), "tcp").toLowerCase();
+            if ("none".equals(network)) network = "tcp";
+            if ("websocket".equals(network)) network = "ws";
+            String tls = firstNonEmpty(p.get("security"), v.optString("tls"), "none").toLowerCase();
+            security = "tls".equals(tls) ? "tls" : "none";
+            flow = firstNonEmpty(p.get("flow"), v.optString("flow"));
+        }
+
+        if (REMOVED_NETWORKS.contains(network)) {
+            return "транспорт «" + network + "» удалён из ядра Xray (его заменил xhttp)";
+        }
+        if (UNBUILDABLE_NETWORKS.contains(network)) {
+            return "транспорт «" + network + "» приложение не строит";
+        }
         if (!NETWORKS.contains(network)) {
             return "транспорт «" + network + "» ядро не умеет";
         }
@@ -81,12 +120,19 @@ public final class XrayEngine {
             if (!"xtls-rprx-vision".equals(flow)) {
                 return "flow «" + flow + "» устарел, ядро его не знает";
             }
-            if (!"tcp".equals(network)) return "flow xtls-rprx-vision работает только на tcp";
+            if (!"tcp".equals(network) && !"raw".equals(network)) {
+                return "flow xtls-rprx-vision работает только на tcp/raw";
+            }
             if (!"tls".equals(security) && !"reality".equals(security)) {
                 return "flow xtls-rprx-vision без TLS не работает";
             }
         }
         if ("reality".equals(security)) {
+            // Xray: REALITY only supports RAW, XHTTP and gRPC — остальное падает уже в ядре.
+            if (!"tcp".equals(network) && !"raw".equals(network) && !"xhttp".equals(network)
+                    && !"splithttp".equals(network) && !"grpc".equals(network)) {
+                return "reality работает только с tcp/xhttp/grpc";
+            }
             String pbk = firstNonEmpty(p.get("pbk"), p.get("publicKey"));
             if (pbk.isEmpty()) return "reality без publicKey (pbk)";
             if (pbk.length() < 40) return "reality: publicKey короче 43 символов";
@@ -99,10 +145,6 @@ public final class XrayEngine {
             }
             // пустой id отсекаем, но формат не проверяем: Xray переводит строку в UUID сам
             if (cfg.userInfo() == null || cfg.userInfo().isEmpty()) return "vless: нет id";
-        }
-        if ("vmess".equals(cfg.scheme)) {
-            // В vmess не проверяем ни id, ни разбор base64: если ссылка битая, это скажет
-            // само ядро («ядро не запустилось»), а ложных отказов быть не должно.
         }
         if ("ss".equals(cfg.scheme) || "shadowsocks".equals(cfg.scheme)) {
             String method = ssMethod(cfg);
@@ -372,6 +414,8 @@ public final class XrayEngine {
             throws org.json.JSONException {
         JSONObject stream = new JSONObject();
         String net = network == null || network.isEmpty() ? "tcp" : network.toLowerCase();
+        if ("websocket".equals(net)) net = "ws";
+        if ("raw".equals(net)) net = "tcp";   // Xray 26 принимает оба имени, старое надёжнее
         stream.put("network", net);
 
         switch (net) {
@@ -390,13 +434,14 @@ public final class XrayEngine {
             }
             case "http":
             case "h2": {
-                stream.put("network", "h2");
-                JSONObject h2 = new JSONObject()
-                        .put("path", path != null && !path.isEmpty() ? path : "/");
-                if (hostHeader != null && !hostHeader.isEmpty()) {
-                    h2.put("host", new JSONArray().put(hostHeader));
-                }
-                stream.put("h2Settings", h2);
+                // Сюда попадать не должны (compatProblem отсекает раньше), но если попали —
+                // не подсовываем ядру удалённый транспорт: XHTTP в режиме stream-one идёт
+                // по тому же h2-соединению и хотя бы не ломает разбор конфига.
+                stream.put("network", "xhttp");
+                stream.put("xhttpSettings", new JSONObject()
+                        .put("path", path != null && !path.isEmpty() ? path : "/")
+                        .put("host", hostHeader != null ? hostHeader : "")
+                        .put("mode", "stream-one"));
                 break;
             }
             case "httpupgrade": {

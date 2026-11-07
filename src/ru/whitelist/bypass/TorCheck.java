@@ -27,8 +27,10 @@ public final class TorCheck {
 
     /** Больше шести мостов за один прогон — это уже полчаса ожидания. */
     private static final int MAX_BRIDGES = 6;
-    /** Сколько ждём, пока Tor поднимется с одним мостом. */
-    private static final int BRIDGE_WAIT_MS = 45000;
+    /** Сколько ждём, пока Tor поднимется с одним мостом (настраивается, 10 с по умолчанию). */
+    private static int bridgeWaitMs(Context c) {
+        return Prefs.torBridgeWaitMs(c);
+    }
     /** Таймаут на тестовую страницу через Tor. */
     private static final int SPEED_TIMEOUT_MS = 20000;
     /** Сколько источников проверяем через Tor (это долго, поэтому немного). */
@@ -57,8 +59,9 @@ public final class TorCheck {
             if (tested.size() >= MAX_BRIDGES) break;
             tested.add(b);
         }
+        final int waitMs = bridgeWaitMs(c);
         say(log, report, "Проверяю мосты: " + tested.size() + " из " + candidates.size()
-                + " (по одному, до " + (BRIDGE_WAIT_MS / 1000) + " с на мост)");
+                + " (по одному, до " + (waitMs / 1000) + " с на мост — лимит меняется в настройках)");
 
         final Map<String, Long> kbps = new LinkedHashMap<>();
         final Map<String, Long> ms = new LinkedHashMap<>();
@@ -68,7 +71,7 @@ public final class TorCheck {
             index++;
             say(log, report, index + "/" + tested.size() + " " + shortBridge(bridge));
             TorEngine.stopAndWait(c, 6000);
-            boolean up = TorEngine.startWith(c, Collections.singletonList(bridge), BRIDGE_WAIT_MS);
+            boolean up = TorEngine.startWith(c, Collections.singletonList(bridge), waitMs);
             if (!up) {
                 say(log, report, "  Tor с этим мостом не поднялся — пропускаю");
                 continue;
@@ -110,7 +113,8 @@ public final class TorCheck {
 
         // --- 3) главное: реально достать списки VLESS через Tor
         say(log, report, "Проверяю резервный путь к спискам: поднимаю Tor с быстрыми мостами…");
-        boolean up = TorEngine.startWith(c, ordered, BRIDGE_WAIT_MS);
+        long multiWait = Math.min(180_000L, (long) ordered.size() * waitMs);
+        boolean up = TorEngine.startWith(c, ordered, multiWait);
         if (!up) {
             say(log, report, "Tor с рабочими мостами не поднялся — резерв недоступен");
             Prefs.setTorReport(c, report.toString());

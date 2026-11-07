@@ -245,7 +245,7 @@ public class BypassVpnService extends VpnService {
         }, "tor-fallback");
         torStarter.setDaemon(true);
         torStarter.start();
-        long torDeadline = System.currentTimeMillis() + TorTunnel.START_TIMEOUT_MS + 8000;
+        long torDeadline = System.currentTimeMillis() + TorTunnel.startTimeoutMs(this) + 8000;
         while (torStarter.isAlive() && System.currentTimeMillis() < torDeadline) {
             if (stopRequested.get() || ConfigRepository.isCancelled()) {
                 TorTunnel.stop(this);
@@ -411,7 +411,7 @@ public class BypassVpnService extends VpnService {
                 XrayEngine.stop();
                 return false;
             }
-            long kbps = Probe.speedKbps(this, XRAY_PORT, Prefs.gateTimeoutMs(this));
+            long kbps = Probe.speedKbps(this, XRAY_PORT, Prefs.gateTimeoutMs(this), 2);
             long need = Math.max(1L, (long) (Prefs.minSpeedKbps(this) * MIN_SPEED_TOLERANCE));
             if (kbps < need) {
                 lastError = "скорость " + (kbps < 0 ? "не измерена" : Prefs.speedText(kbps))

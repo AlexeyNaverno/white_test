@@ -22,14 +22,18 @@ public final class Probe {
 
     /** Меньше этого объёма — оценка скорости недостоверна. */
     public static final int MIN_SAMPLE_BYTES = 8 * 1024;
-    /** Сколько качаем за один замер (хватает, чтобы оценить и быстрый, и медленный канал). */
-    public static final long MAX_SAMPLE_BYTES = 128 * 1024;
     /**
-     * Сколько ждём, пока Xray откроет локальный SOCKS. 3000 мс: живой конфиг открывает
-     * SOCKS за первые сотни миллисекунд, а мёртвый всё равно не откроет — ждать дольше
-     * значит растягивать сбор пула на минуты.
+     * Сколько качаем за один замер. 512 КБ: на быстром канале 128 КБ уходили за десятки
+     * миллисекунд, и скорость получалась случайной; ограничивает замер всё равно бюджет
+     * времени, так что медленный канал этот объём никогда не выберет.
      */
-    public static final long SOCKS_WAIT_MS = 3000;
+    public static final long MAX_SAMPLE_BYTES = 512 * 1024;
+    /**
+     * Сколько ждём, пока Xray откроет локальный SOCKS. 4000 мс: холодный старт ядра
+     * (в несколько дорожек, на слабом телефоне) иногда не укладывается в 3 с — и рабочий
+     * конфиг получал «SOCKS не открылся». Мёртвому конфигу разница не важна.
+     */
+    public static final long SOCKS_WAIT_MS = 4000;
 
     /** Замер скорости: значение + чем именно он получен. */
     public static final class Speed {
@@ -38,22 +42,35 @@ public final class Probe {
         public final long bytes;
         public final long ms;
         public final int attempts;
+        /** Чем закончилась последняя неудачная попытка (для лога). */
+        public final String error;
 
         Speed(long kbps, String url, long bytes, long ms, int attempts) {
+            this(kbps, url, bytes, ms, attempts, "");
+        }
+
+        Speed(long kbps, String url, long bytes, long ms, int attempts, String error) {
             this.kbps = kbps;
             this.url = url == null ? "" : url;
             this.bytes = bytes;
             this.ms = ms;
             this.attempts = attempts;
+            this.error = error == null ? "" : error;
         }
 
         public boolean ok() {
             return kbps > 0;
         }
 
-        /** «512 КБ/с (4096 кбит/с) · 512 КБ за 1 000 мс» или «нет данных (3 URL)». */
+        /**
+         * «512 КБ/с (4096 кбит/с) · 512 КБ за 1 000 мс» или «нет данных (2 URL): таймаут ответа».
+         * Причина обязательна: без неё в логе не видно, что именно сломалось.
+         */
         public String text() {
-            if (kbps <= 0) return "нет данных (" + attempts + " URL)";
+            if (kbps <= 0) {
+                return "нет данных (" + attempts + " URL)"
+                        + (error.isEmpty() ? "" : ": " + error);
+            }
             return Prefs.speedText(kbps) + " · " + (bytes / 1024) + " КБ за " + ms + " мс";
         }
     }
@@ -138,6 +155,7 @@ public final class Probe {
         long bestBytes = 0;
         long bestMs = 0;
         int attempts = 0;
+        String lastError = "";
         for (String url : speedPlan(Prefs.speedUrls(ctx), maxUrls)) {
             if (ConfigRepository.isCancelled()) break;
             attempts++;
@@ -150,9 +168,10 @@ public final class Probe {
                 bestBytes = r.bytes;
                 bestMs = r.ms;
             }
+            if (best <= 0) lastError = r.reason();
             if (best > 0) break; // первого успешного замера достаточно
         }
-        return new Speed(best, bestUrl, bestBytes, bestMs, attempts);
+        return new Speed(best, bestUrl, bestBytes, bestMs, attempts, lastError);
     }
 
     /**
@@ -168,12 +187,16 @@ public final class Probe {
     static java.util.List<String> speedPlan(java.util.List<String> urls, int maxUrls) {
         java.util.List<String> plan = new java.util.ArrayList<>();
         if (urls == null || urls.isEmpty() || maxUrls <= 0) return plan;
-        plan.add(urls.get(0));
-        if (plan.size() < maxUrls) {
+        boolean shortProbe = maxUrls <= 3;
+        if (shortProbe) {
+            // Быстрая отбраковка: сначала небольшой файл с CDN — он отвечает почти везде
+            // и не занимает окно замера большой загрузкой.
             for (String u : urls) {
                 if (isCdnFriendly(u) && !plan.contains(u)) { plan.add(u); break; }
             }
         }
+        // «Настоящий» источник с GitHub: полный замер начинается с него (он же доказывает
+        // доступность зарубежного списка), а в короткой проверке он идёт вторым.
         for (String u : urls) {
             if (plan.size() >= maxUrls) break;
             if (!plan.contains(u)) plan.add(u);
@@ -191,6 +214,14 @@ public final class Probe {
     /** Скорость канала через уже поднятый SOCKS, КБ/с. -1 — данных не получили. */
     public static long speedKbps(Context ctx, int socksPort, int timeoutMs) {
         return measureSpeed(ctx, socksPort, timeoutMs).kbps;
+    }
+
+    /**
+     * То же, но с ограничением числа URL: подключению хватает двух попыток, иначе
+     * перебор всех источников растягивает каждую попытку подключения.
+     */
+    public static long speedKbps(Context ctx, int socksPort, int timeoutMs, int maxUrls) {
+        return measureSpeed(ctx, socksPort, timeoutMs, maxUrls).kbps;
     }
 
     /**
@@ -239,7 +270,8 @@ public final class Probe {
                 return new Result(false, -1, port,
                         "SOCKS не открылся за " + (SOCKS_WAIT_MS / 1000) + " с", null);
             }
-            Speed s = measureSpeed(ctx, port, timeoutMs, 2);
+            // Три попытки: GitHub может быть закрыт, Cloudflare — открыт (и наоборот).
+            Speed s = measureSpeed(ctx, port, timeoutMs, 3);
             if (!s.ok()) {
                 return new Result(false, -1, port, s.text(), s);
             }
