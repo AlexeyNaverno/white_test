@@ -107,7 +107,7 @@ public final class NetChecker {
             conn.setConnectTimeout(timeoutMs);
             conn.setReadTimeout(timeoutMs);
             conn.setInstanceFollowRedirects(true);
-            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.0.8");
+            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.0.9");
             int code = conn.getResponseCode();
             if (code >= 400) {
                 conn.disconnect();
@@ -144,7 +144,7 @@ public final class NetChecker {
             conn.setReadTimeout(timeoutMs);
             conn.setRequestMethod("GET");
             conn.setInstanceFollowRedirects(true);
-            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.0.8");
+            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.0.9");
             int code = conn.getResponseCode();
             try {
                 InputStream in = conn.getInputStream();

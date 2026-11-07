@@ -317,7 +317,7 @@ public class SettingsActivity extends Activity {
         });
         root.addView(save);
 
-        Button browser = smallButton("Браузер (одна вкладка, поиск DuckDuckGo)");
+        Button browser = smallButton("Браузер (только Tor с мостами, поиск DuckDuckGo)");
         browser.setTextColor(0xFFB388FF);
         browser.setTextSize(15);
         browser.setOnClickListener(new View.OnClickListener() {
@@ -329,7 +329,7 @@ public class SettingsActivity extends Activity {
         root.addView(browser);
 
         TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.0.8\n"
+        footer.setText("Обход Белых Списков 0.0.9\n"
                 + versionLine() + "\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");
         footer.setTextColor(TEXT_DIM);
