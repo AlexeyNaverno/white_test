@@ -69,6 +69,12 @@ jobs:
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           tail -n 40 /tmp/build.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+          # Аннотации видны в `gh run view` — логи иначе недоступны из API
+          n=0
+          grep -nE "error:|Error:|error \[|FAILED|FAILURE|Caused by|fatal:|\* What went wrong" /tmp/build.log \
+            | tail -12 | while IFS= read -r line; do
+              echo "::error title=build::$(echo "$line" | tr '\n' ' ' | cut -c1-900)"
+            done
 
       - name: Загрузить лог сборки
         if: failure()
