@@ -14,12 +14,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # нативные исходники (ciadpi, hev-socks5-tunnel, Xray-core) — git-сабмодули
           submodules: recursive
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -81,7 +81,7 @@ jobs:
           done < /tmp/why.txt
       - name: Загрузить лог сборки
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: build-log-${{ github.run_id }}
           path: build-log.txt
@@ -141,7 +141,7 @@ jobs:
           rm -f *.idsig
           [ "$FAIL" = 0 ] || { echo "::error::ассерты не пройдены"; exit 1; }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: WhitelistBypass-${{ env.VERSION }}
