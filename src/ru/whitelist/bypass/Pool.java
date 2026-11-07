@@ -55,6 +55,20 @@ public final class Pool {
         return new File(c.getFilesDir(), FILE);
     }
 
+    /**
+     * Канонические ключи конфигов, которые уже лежат в пуле.
+     * Быстрому поиску они не нужны: их проверяют только при «Собрать пул» — на случай,
+     * если конфиг перестал работать.
+     */
+    public static java.util.Set<String> keySet(Context c) {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        for (Entry e : load(c)) {
+            String key = ConfigRepository.canonicalKey(e.raw);
+            if (key != null && !key.isEmpty()) out.add(key);
+        }
+        return out;
+    }
+
     /** Все записи пула, по убыванию скорости. */
     public static synchronized List<Entry> load(Context c) {
         List<Entry> out = new ArrayList<>();

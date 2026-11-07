@@ -1,6 +1,8 @@
 package ru.whitelist.bypass;
 
 import android.app.Activity;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.Gravity;
@@ -23,6 +25,12 @@ import java.nio.charset.StandardCharsets;
  */
 public class SettingsActivity extends Activity {
 
+    private static final int REQ_EXPORT = 1001;
+    private static final int REQ_IMPORT = 1002;
+    /** Текст пула для экспорта: пишем в файл после того, как пользователь выбрал место. */
+    private String pendingExport;
+    private TextView importLog;
+
     private static final int TEXT = 0xFFE8EEF5;
     private static final int TEXT_DIM = 0xFF8CA3B8;
 
@@ -43,7 +51,7 @@ public class SettingsActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(0xFF0E141B);
+        scroll.setBackgroundColor(0xFF000000);
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(16), dp(16), dp(16), dp(32));
@@ -60,7 +68,7 @@ public class SettingsActivity extends Activity {
                 + "засчитывается, если качает быстрее 16 КБ/с. Хотите строже — 512 или 1024.");
 
         editLanes = numberField(String.valueOf(Prefs.speedLanes(this)));
-        label("Сколько ядер мерить скорость одновременно (1–4, по умолчанию 3)");
+        label("Сколько ядер мерить скорость одновременно (1–4, по умолчанию 4)");
         root.addView(editLanes);
 
         editSpeedUrls = multiField(Prefs.join(Prefs.speedUrls(this)), 3);
@@ -71,6 +79,8 @@ public class SettingsActivity extends Activity {
         label("Сколько ждём на один замер, мс");
         root.addView(editGateTimeout);
 
+        note("Замер идёт на маленьких файлах (32 и 128 КБ) и в несколько дорожек параллельно: "
+                + "канал видно по первым килобайтам, а ждать мегабайты незачем.");
         note("Скорость важнее пинга: пул сортируется по КБ/с, подключение начинается "
                 + "с самого быстрого. Конфиги медленнее порога не попадают в пул вообще.");
 
@@ -111,7 +121,7 @@ public class SettingsActivity extends Activity {
 
         // --- DPI на линии ---
         section("DPI-обход");
-        swDesync = switchRow("DPI-обход линии до VPN-сервера (ciadpi), если напрямую не вышло",
+        swDesync = switchRow("DPI-обход линии до VPN-сервера (ciadpi) — по умолчанию выключен",
                 Prefs.desyncLine(this));
         editStrategy = singleField(Prefs.dpiStrategy(this));
         label("Стратегия ciadpi (аргументы командной строки)");
@@ -127,7 +137,7 @@ public class SettingsActivity extends Activity {
                 + "не прошло (первые 3 конфига). TLS к серверу при этом фрагментируется, "
                 + "поэтому для Reality этот путь может не сработать.");
 
-        swDpiAutotune = switchRow("Подбирать стратегию автоматически под текущего провайдера",
+        swDpiAutotune = switchRow("Подбирать стратегию автоматически (только вместе с DPI-обходом)",
                 Prefs.dpiAutotune(this));
         note("При подключении приложение по очереди поднимает ciadpi с разными стратегиями "
                 + "и проверяет, открываются ли заблокированные адреса. Первая подошедшая "
@@ -284,6 +294,56 @@ public class SettingsActivity extends Activity {
         });
         root.addView(checkTor);
 
+        // --- пул: импорт и экспорт ---
+        section("Пул: импорт и экспорт");
+        note("Экспорт — обычный .txt, по одной ссылке на строку. Импорт файлу не доверяет: "
+                + "дубликаты отбрасываются (и внутри файла, и уже лежащие в пуле), остальные "
+                + "пингуются, затем у живых замеряется скорость — в пул попадают только "
+                + "прошедшие порог.");
+
+        final TextView poolOut = new TextView(this);
+        poolOut.setTextColor(TEXT_DIM);
+        poolOut.setTextSize(12);
+        poolOut.setText("В пуле " + Pool.count(this) + " конфигов.");
+        root.addView(poolOut);
+        importLog = poolOut;
+
+        Button exportPool = smallButton("Экспорт рабочих конфигов в .txt");
+        exportPool.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                if (Pool.count(SettingsActivity.this) == 0) {
+                    toast("Пул пуст — экспортировать нечего");
+                    return;
+                }
+                pendingExport = PoolIo.exportText(SettingsActivity.this);
+                Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("text/plain");
+                intent.putExtra(Intent.EXTRA_TITLE, "whitelist-pool.txt");
+                try {
+                    startActivityForResult(intent, REQ_EXPORT);
+                } catch (Exception e) {
+                    toast("Нет приложения для сохранения файла");
+                }
+            }
+        });
+        root.addView(exportPool);
+
+        Button importPool = smallButton("Импорт .txt: дубликаты → пинг → скорость");
+        importPool.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("text/*");
+                try {
+                    startActivityForResult(intent, REQ_IMPORT);
+                } catch (Exception e) {
+                    toast("Нет приложения для выбора файла");
+                }
+            }
+        });
+        root.addView(importPool);
+
         // --- данные ---
         section("Данные");
         swEmbedded = switchRow("Встроенный резерв конфигов", Prefs.embeddedEnabled(this));
@@ -329,7 +389,7 @@ public class SettingsActivity extends Activity {
         root.addView(browser);
 
         TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.0.9\n"
+        footer.setText("Обход Белых Списков 0.1.0\n"
                 + versionLine() + "\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");
         footer.setTextColor(TEXT_DIM);
@@ -342,6 +402,88 @@ public class SettingsActivity extends Activity {
     protected void onPause() {
         super.onPause();
         savePrefs();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        final Uri uri = data.getData();
+        if (requestCode == REQ_EXPORT) {
+            final String text = pendingExport;
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    final boolean ok = writeTo(uri, text);
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            toast(ok ? "Пул сохранён в файл" : "Не удалось сохранить файл");
+                        }
+                    });
+                }
+            }, "pool-export").start();
+        } else if (requestCode == REQ_IMPORT) {
+            startImport(uri);
+        }
+    }
+
+    private boolean writeTo(Uri uri, String text) {
+        try (java.io.OutputStream out = getContentResolver().openOutputStream(uri)) {
+            if (out == null) return false;
+            out.write((text == null ? "" : text).getBytes(StandardCharsets.UTF_8));
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private String readAll(Uri uri) {
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) return null;
+            java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+            byte[] chunk = new byte[16384];
+            int n;
+            while ((n = in.read(chunk)) > 0) buf.write(chunk, 0, n);
+            return new String(buf.toByteArray(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Импорт в фоне: чтение файла → дедупликация → пинг → скорость → пул. */
+    private void startImport(final Uri uri) {
+        if (importLog != null) importLog.setText("Читаю файл…");
+        toast("Импорт: пинг и скорость займут время");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                final String text = readAll(uri);
+                if (text == null) {
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() { toast("Не удалось прочитать файл"); }
+                    });
+                    return;
+                }
+                ConfigRepository.clearCancel();
+                final StringBuilder sb = new StringBuilder();
+                final PoolIo.Result res = PoolIo.importText(SettingsActivity.this, text,
+                        new PoolIo.Log() {
+                            @Override public void line(String message) {
+                                sb.append(message).append('\n');
+                                runOnUiThread(new Runnable() {
+                                    @Override public void run() {
+                                        if (importLog != null) importLog.setText(sb.toString());
+                                    }
+                                });
+                            }
+                        });
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (importLog != null) importLog.setText(sb.toString()
+                                + "\nИтог: " + res.summary() + "\nВ пуле " + Pool.count(SettingsActivity.this));
+                        toast("Импорт: добавлено " + res.added);
+                    }
+                });
+            }
+        }, "pool-import").start();
     }
 
     private void savePrefs() {

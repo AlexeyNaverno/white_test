@@ -48,6 +48,7 @@ public final class XrayEngine {
     private static final java.util.regex.Pattern UUID_RE = java.util.regex.Pattern.compile(
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
+    /** Похоже ли на UUID. Не требование: Xray сам переводит произвольную строку в UUID v5. */
     public static boolean isUuid(String v) {
         return v != null && UUID_RE.matcher(v.trim()).matches();
     }
@@ -96,11 +97,13 @@ public final class XrayEngine {
             if (enc != null && !enc.isEmpty() && !"none".equalsIgnoreCase(enc)) {
                 return "vless: encryption=" + enc + " не поддерживается";
             }
-            if (!isUuid(cfg.userInfo())) return "vless: id не UUID";
+            if (cfg.userInfo() == null || cfg.userInfo().isEmpty()) return "vless: нет id";
         }
         if ("vmess".equals(cfg.scheme)) {
+            // Xray принимает не только UUID: любую строку он сам переводит в UUID v5,
+            // поэтому id вида «my-password» — рабочий конфиг, а не ошибка.
             String id = vmessJson(cfg).optString("id");
-            if (!isUuid(id)) return "vmess: id не UUID";
+            if (id == null || id.isEmpty()) return "vmess: нет id";
         }
         if ("ss".equals(cfg.scheme) || "shadowsocks".equals(cfg.scheme)) {
             String method = ssMethod(cfg);
