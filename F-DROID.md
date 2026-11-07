@@ -45,19 +45,24 @@ git ls-files | grep -Ei '\.(so|aar|jar|apk)$'   # пусто — бинарни�
 
 ## Что осталось сделать перед отправкой в fdroiddata
 
-1. **Рецепт `metadata/ru.whitelist.bypass.yml`** — черновик лежит в репозитории. Для
+1. **Тулчейн на сборочном сервере.** Сборке нужны AGP 9.4.1 + Gradle 9.8.2 и
+   `platforms;android-37.1`: `libv2ray.aar` и `tor-android:0.4.9.13.2` объявляют
+   в aar-metadata требование `compileSdk 37.1`. Если в fdroiddata платформы 37.1 ещё нет,
+   сборка упадёт на `checkReleaseAarMetadata` — тогда либо ждём обновления образа,
+   либо откатываем `tor-android` на версию, собранную против 37.0 (и `compileSdk 37`).
+2. **Рецепт `metadata/ru.whitelist.bypass.yml`** — черновик лежит в репозитории. Для
    fdroiddata его нужно проверить `fdroid lint` и `fdroid build --server` (или обычной
    сборкой): основной риск — версия Go, нужная Xray-core (`native/libv2ray/go.mod`),
    и шаг `prebuild`, который ставит gomobile.
-2. **`geoip.dat`/`geosite.dat`.** `tools/build-libv2ray.sh` скачивает их скриптом
+3. **`geoip.dat`/`geosite.dat`.** `tools/build-libv2ray.sh` скачивает их скриптом
    `gen_assets.sh download` из апстрима Xray. Это данные, а не код; если мейнтейнеры
    F-Droid посчитают их «скачиванием бинарных данных при сборке», эти файлы нужно
    положить в отдельный сабмодуль (`Xray-core` уже содержит генераторы geodata) или
    собирать их из `geofiles` в репозитории Xray.
-3. **Версия Go.** В образе сборочных серверов F-Droid Go может быть старше, чем требует
+4. **Версия Go.** В образе сборочных серверов F-Droid Go может быть старше, чем требует
    `go.mod` Xray; тогда в `prebuild` добавляется установка Go нужной версии с golang.org
    (в рецепте это место помечено).
-4. **Скриншоты.** В `fastlane/.../images/phoneScreenshots/` лежат два снимка (главный экран
+5. **Скриншоты.** В `fastlane/.../images/phoneScreenshots/` лежат два снимка (главный экран
    и раздел «Скорость»). Если UI поменяется — обновить их.
 5. **Отправка:** форк `fdroiddata`, файл `metadata/ru.whitelist.bypass.yml` из этого
    репозитория, merge request в `fdroid/fdroiddata`; при первом включении мейнтейнеры
