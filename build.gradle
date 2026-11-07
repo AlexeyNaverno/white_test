@@ -17,8 +17,10 @@ def abiList = (project.findProperty('abis') ?: 'armeabi-v7a,arm64-v8a').split(',
 
 android {
     namespace 'ru.whitelist.bypass'
-    // 37 — требование aar-metadata зависимостей (tor-android, libv2ray).
+    // 37.1 — требование aar-metadata зависимостей (tor-android 0.4.9.13.2
+    // собран против android-37.0 и просит 37.1). Минор задаётся отдельно.
     compileSdk 37
+    compileSdkMinor 1
     // NDK нужен для сборки libbyedpi.so из исходников (ciadpi + hev-socks5-tunnel).
     ndkVersion '26.3.11579264'
 

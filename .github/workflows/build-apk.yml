@@ -26,12 +26,12 @@ jobs:
 
       # Свежий cmdline-tools обязателен: старый индекс SDK не знает пакета
       # platforms;android-37.0 (он нужен из-за aar-metadata зависимостей).
-      - name: Android SDK (platform 37, build-tools 37.0.0)
+      - name: Android SDK (platform 37.1, build-tools 37.0.0)
         uses: android-actions/setup-android@v4
         with:
           log-accepted-android-sdk-licenses: false
           cmdline-tools-version: '14742923'
-          packages: 'platforms;android-37.0 build-tools;37.0.0 platform-tools'
+          packages: 'platforms;android-37.1 platforms;android-37.0 build-tools;37.0.0 platform-tools'
 
       - name: Android NDK 26.3
         run: |
