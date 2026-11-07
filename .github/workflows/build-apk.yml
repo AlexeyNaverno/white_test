@@ -26,19 +26,18 @@ jobs:
 
       - name: Android SDK (platform 35, build-tools 35.0.0, NDK 26.3)
         run: |
-          SDK="$HOME/android-sdk"
-          mkdir -p "$SDK/cmdline-tools"
-          curl -fsSL --retry 3 -o /tmp/cmdtools.zip \
-            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q /tmp/cmdtools.zip -d "$SDK/cmdline-tools"
-          mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
-          chmod -R +x "$SDK/cmdline-tools/latest/bin" "$SDK/cmdline-tools/latest/lib"
-          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --licenses > /dev/null
-          "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" \
-            "platforms;android-35" "build-tools;35.0.0" "ndk;26.3.11579264"
+          # На образе runner уже есть SDK: ставим в него нужные пакеты и выставляем ОДИН
+          # путь (AGP падает, если ANDROID_HOME и ANDROID_SDK_ROOT указывают в разные места).
+          SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          SDKM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKM" ] || SDKM="$(find "$SDK" -name sdkmanager -type f | head -1)"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;android-35" "build-tools;35.0.0" "ndk;26.3.11579264"
           echo "ANDROID_SDK=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=$SDK/ndk/26.3.11579264" >> "$GITHUB_ENV"
+          ls "$SDK/ndk"
 
       - name: Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
