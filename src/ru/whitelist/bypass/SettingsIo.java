@@ -40,6 +40,7 @@ public final class SettingsIo {
             Prefs.DPI_STRATEGY,
             Prefs.DPI_SOURCES,
             Prefs.DPI_AUTOTUNE,
+            Prefs.ALLOW_NO_TLS,
             Prefs.DPI_TEST_URLS,
             Prefs.VPN_DNS,
             Prefs.IPV6,

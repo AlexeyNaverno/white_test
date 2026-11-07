@@ -63,9 +63,112 @@ public final class XrayEngine {
     private static final java.util.regex.Pattern UUID_RE = java.util.regex.Pattern.compile(
             "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
 
+    /**
+     * Ядро Xray 26 отказывается поднимать VLESS/Trojan без TLS к публичному адресу
+     * (infra/conf: requiresTransportSecurity) — ровно этой строкой и падает половина
+     * публичных списков. Формулировка одна на всех, чтобы в сводке причин они
+     * складывались в один счётчик, а не в десятки строк.
+     */
+    public static final String NO_TLS_REASON =
+            "ядро Xray 26 не пускает без TLS — нужен security=tls или reality";
+
     /** Похоже ли на UUID. Не требование: Xray сам переводит произвольную строку в UUID v5. */
     public static boolean isUuid(String v) {
         return v != null && UUID_RE.matcher(v.trim()).matches();
+    }
+
+    /** Значения security в ссылках бывают «tls/true/false/none/1» — приводим к каноническим. */
+    public static String normalizeSecurity(String value, boolean trojanDefaultTls) {
+        String v = value == null ? "" : value.trim().toLowerCase();
+        if (v.isEmpty()) return trojanDefaultTls ? "tls" : "none";
+        if ("true".equals(v) || "1".equals(v) || "yes".equals(v) || "on".equals(v)) return "tls";
+        if ("false".equals(v) || "0".equals(v) || "no".equals(v) || "off".equals(v)) return "none";
+        return v;
+    }
+
+    /**
+     * Собственное шифрование VLESS (Xray 26: mlkem768x25519plus…): с ним ядро пускает
+     * outbound и без TLS. null — шифрования нет.
+     */
+    private static String vlessEncryption(Map<String, String> p) {
+        String enc = p.get("encryption");
+        if (enc == null) return null;
+        enc = enc.trim();
+        return enc.isEmpty() || "none".equalsIgnoreCase(enc) ? null : enc;
+    }
+
+    private static final java.util.regex.Pattern IPV4_RE = java.util.regex.Pattern.compile(
+            "^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$");
+
+    /**
+     * Адрес, который ядро считает «своим» и пускает без TLS: частные, loopback и
+     * link-local IP плюс локальные домены (см. geodata.GetPrivateDomainMatcher).
+     */
+    public static boolean isPrivateHost(String host) {
+        if (host == null) return false;
+        String h = host.trim().toLowerCase();
+        if (h.startsWith("[") && h.endsWith("]") && h.length() > 2) {
+            h = h.substring(1, h.length() - 1);
+        }
+        if (h.isEmpty()) return false;
+        if ("localhost".equals(h)) return true;
+        for (String suffix : new String[]{".localhost", ".local", ".lan", ".internal",
+                ".home.arpa", ".test", ".invalid"}) {
+            if (h.endsWith(suffix)) return true;
+        }
+        java.util.regex.Matcher m = IPV4_RE.matcher(h);
+        if (m.matches()) {
+            try {
+                int a = Integer.parseInt(m.group(1));
+                int b = Integer.parseInt(m.group(2));
+                return a == 10 || a == 127
+                        || (a == 192 && b == 168)
+                        || (a == 172 && b >= 16 && b <= 31)
+                        || (a == 169 && b == 254);
+            } catch (NumberFormatException e) {
+                return false;
+            }
+        }
+        if (h.indexOf(':') >= 0) {   // IPv6
+            return "::1".equals(h) || h.startsWith("fc") || h.startsWith("fd")
+                    || h.startsWith("fe8") || h.startsWith("fe9")
+                    || h.startsWith("fea") || h.startsWith("feb");
+        }
+        return false;
+    }
+
+    /**
+     * Конфиг попадёт под запрет «VLESS/Trojan без TLS к публичному адресу», но его можно
+     * спасти: outbound смотрит на локальный dokodemo-door (loopback — «свой» адрес для
+     * ядра), а тот отдаёт соединение настоящему серверу. Так публичные списки без TLS
+     * (ws/CDN, обычный tcp) снова работают — ценой одного локального хопа.
+     */
+    public static boolean needsRelay(ProxyConfig cfg) {
+        if (cfg == null || cfg.host == null || cfg.host.trim().isEmpty()) return false;
+        if (!"vless".equals(cfg.scheme) && !"trojan".equals(cfg.scheme)) return false;
+        Map<String, String> p = cfg.params();
+        String security = normalizeSecurity(p.get("security"), "trojan".equals(cfg.scheme));
+        if ("tls".equals(security) || "reality".equals(security)) return false;
+        if ("vless".equals(cfg.scheme) && vlessEncryption(p) != null) return false;
+        return !isPrivateHost(cfg.host);
+    }
+
+    /** Свободный порт на loopback; 0 — не нашёлся. */
+    static int freePort() {
+        java.net.ServerSocket socket = null;
+        try {
+            socket = new java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"));
+            return socket.getLocalPort();
+        } catch (Exception e) {
+            return 0;
+        } finally {
+            if (socket != null) {
+                try {
+                    socket.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
     }
 
     /**
@@ -76,6 +179,15 @@ public final class XrayEngine {
      * у конфига, который «проверен на пинг».
      */
     public static String compatProblem(ProxyConfig cfg) {
+        return compatProblem(cfg, false);
+    }
+
+    /**
+     * @param allowRelay true — конфиги без TLS разрешены: они пойдут через локальный
+     *                   ретранслятор (см. {@link #needsRelay}), и правило ядра
+     *                   «только к приватному адресу» сработает на loopback.
+     */
+    public static String compatProblem(ProxyConfig cfg, boolean allowRelay) {
         if (cfg == null) return "пустой конфиг";
         if (!cfg.supported) {
             return cfg.unsupportedReason != null ? cfg.unsupportedReason : "схема не поддерживается";
@@ -85,8 +197,7 @@ public final class XrayEngine {
 
         Map<String, String> p = cfg.params();
         String network = firstNonEmpty(p.get("type"), "tcp").toLowerCase();
-        String security = firstNonEmpty(p.get("security"),
-                "trojan".equals(cfg.scheme) ? "tls" : "none").toLowerCase();
+        String security = normalizeSecurity(p.get("security"), "trojan".equals(cfg.scheme));
         String flow = p.get("flow");
 
         if ("vmess".equals(cfg.scheme)) {
@@ -138,11 +249,19 @@ public final class XrayEngine {
             if (pbk.length() < 40) return "reality: publicKey короче 43 символов";
             if (firstNonEmpty(p.get("sni"), p.get("peer")).isEmpty()) return "reality без sni";
         }
-        if ("vless".equals(cfg.scheme)) {
-            String enc = p.get("encryption");
-            if (enc != null && !enc.isEmpty() && !"none".equalsIgnoreCase(enc)) {
-                return "vless: encryption=" + enc + " не поддерживается";
+        // Ядро Xray 26 не поднимает VLESS/Trojan без TLS к публичному адресу — проверяем
+        // это ДО запуска ядра: иначе каждая такая попытка съедает дорожку замера и
+        // засоряет лог километровой цепочкой infra/conf: serial: …
+        // Правило касается только VLESS и Trojan: у vmess и Shadowsocks своё шифрование,
+        // их ядро без TLS пускает.
+        if (("vless".equals(cfg.scheme) || "trojan".equals(cfg.scheme))
+                && !"tls".equals(security) && !"reality".equals(security)) {
+            boolean vlessEncrypted = "vless".equals(cfg.scheme) && vlessEncryption(p) != null;
+            if (!vlessEncrypted && !isPrivateHost(cfg.host) && !allowRelay) {
+                return NO_TLS_REASON;
             }
+        }
+        if ("vless".equals(cfg.scheme)) {
             // пустой id отсекаем, но формат не проверяем: Xray переводит строку в UUID сам
             if (cfg.userInfo() == null || cfg.userInfo().isEmpty()) return "vless: нет id";
         }
@@ -202,6 +321,10 @@ public final class XrayEngine {
     public static String buildConfigJson(ProxyConfig cfg, int localSocksPort, boolean allowInsecure,
                                          String dns, int desyncSocksPort) {
         try {
+            // Конфиг без TLS к публичному адресу ядро не примет: подставляем локальный
+            // ретранслятор — outbound идёт на 127.0.0.1, а dokodemo-door отдаёт
+            // соединение настоящему серверу (дальше по правилам routing).
+            final int relayPort = needsRelay(cfg) ? freePort() : 0;
             JSONObject root = new JSONObject();
             JSONObject log = new JSONObject();
             log.put("loglevel", "warning");
@@ -218,10 +341,23 @@ public final class XrayEngine {
                     .put("enabled", true)
                     .put("destOverride", new JSONArray().put("http").put("tls").put("quic")));
             inbounds.put(inbound);
+            if (relayPort > 0) {
+                JSONObject relay = new JSONObject();
+                relay.put("tag", "relay-in")
+                        .put("listen", "127.0.0.1")
+                        .put("port", relayPort)
+                        .put("protocol", "dokodemo-door")
+                        .put("settings", new JSONObject()
+                                .put("address", cfg.host)
+                                .put("port", cfg.port)
+                                .put("network", "tcp")
+                                .put("followRedirect", false));
+                inbounds.put(relay);
+            }
             root.put("inbounds", inbounds);
 
             JSONArray outbounds = new JSONArray();
-            JSONObject main = buildOutbound(cfg, allowInsecure);
+            JSONObject main = buildOutbound(cfg, allowInsecure, relayPort);
             if (main == null) {
                 throw new IllegalArgumentException(cfg.unsupportedReason != null
                         ? cfg.unsupportedReason : "неподдерживаемый протокол: " + cfg.scheme);
@@ -232,6 +368,7 @@ public final class XrayEngine {
             outbounds.put(new JSONObject().put("tag", "block").put("protocol", "blackhole")
                     .put("settings", new JSONObject()));
 
+            boolean desyncReady = false;
             if (desyncSocksPort > 0) {
                 try {
                     JSONObject desync = new JSONObject();
@@ -241,18 +378,34 @@ public final class XrayEngine {
                     desync.put("settings", new JSONObject()
                             .put("servers", new JSONArray().put(server)));
                     outbounds.put(desync);
+                    desyncReady = true;
 
-                    JSONObject stream = main.optJSONObject("streamSettings");
-                    if (stream == null) {
-                        stream = new JSONObject();
-                        main.put("streamSettings", stream);
+                    // При ретрансляторе proxySettings не нужен: ciadpi фрагментировал бы
+                    // бессмысленный loopback-хоп. Вместо этого relay-in маршрутизируется в
+                    // «desync», и DPI-обход работает на настоящем соединении с сервером.
+                    if (relayPort <= 0) {
+                        JSONObject stream = main.optJSONObject("streamSettings");
+                        if (stream == null) {
+                            stream = new JSONObject();
+                            main.put("streamSettings", stream);
+                        }
+                        stream.put("proxySettings", new JSONObject().put("tag", "desync"));
                     }
-                    stream.put("proxySettings", new JSONObject().put("tag", "desync"));
                 } catch (Exception e) {
                     android.util.Log.w("WhitelistBypass", "desync-outbound не добавлен", e);
                 }
             }
 
+            if (relayPort > 0) {
+                JSONArray rules = new JSONArray();
+                rules.put(new JSONObject()
+                        .put("type", "field")
+                        .put("inboundTag", new JSONArray().put("relay-in"))
+                        .put("outboundTag", desyncReady ? "desync" : "direct"));
+                root.put("routing", new JSONObject()
+                        .put("domainStrategy", "AsIs")
+                        .put("rules", rules));
+            }
             root.put("outbounds", outbounds);
             // Несколько резервных DNS: ядро пробует их по очереди.
             JSONArray servers = new JSONArray();
@@ -272,12 +425,16 @@ public final class XrayEngine {
         }
     }
 
-    private static JSONObject buildOutbound(ProxyConfig cfg, boolean allowInsecureGlobal)
+    private static JSONObject buildOutbound(ProxyConfig cfg, boolean allowInsecureGlobal,
+                                            int relayPort)
             throws org.json.JSONException {
         Map<String, String> p = cfg.params();
+        // С ретранслятором outbound смотрит на loopback, настоящий адрес — у dokodemo.
+        final String outHost = relayPort > 0 ? "127.0.0.1" : cfg.host;
+        final int outPort = relayPort > 0 ? relayPort : cfg.port;
         String sni = firstNonEmpty(p.get("sni"), p.get("peer"), p.get("host"), cfg.host);
         String network = firstNonEmpty(p.get("type"), "tcp");
-        String security = firstNonEmpty(p.get("security"), "none");
+        String security = normalizeSecurity(p.get("security"), "trojan".equals(cfg.scheme));
         boolean allowInsecure = allowInsecureGlobal
                 || "1".equals(p.get("allowInsecure")) || "true".equalsIgnoreCase(p.get("allowInsecure"))
                 || "1".equals(p.get("insecure")) || "true".equalsIgnoreCase(p.get("insecure"));
@@ -293,12 +450,15 @@ public final class XrayEngine {
                 JSONArray vnext = new JSONArray();
                 JSONArray users = new JSONArray();
                 JSONObject user = new JSONObject();
-                user.put("id", cfg.userInfo()).put("encryption", "none");
+                // encryption из ссылки (Xray 26: mlkem768x25519plus…) — с ним ядро
+                // разрешает VLESS без TLS; иначе классическое «none».
+                String enc = vlessEncryption(p);
+                user.put("id", cfg.userInfo()).put("encryption", enc != null ? enc : "none");
                 String flow = p.get("flow");
                 if (flow != null && !flow.isEmpty()) user.put("flow", flow);
                 users.put(user);
                 vnext.put(new JSONObject()
-                        .put("address", cfg.host).put("port", cfg.port).put("users", users));
+                        .put("address", outHost).put("port", outPort).put("users", users));
                 out.put("settings", new JSONObject().put("vnext", vnext));
                 break;
             }
@@ -307,7 +467,7 @@ public final class XrayEngine {
                 if ("none".equals(security)) security = "tls";
                 JSONArray servers = new JSONArray();
                 servers.put(new JSONObject()
-                        .put("address", cfg.host).put("port", cfg.port)
+                        .put("address", outHost).put("port", outPort)
                         .put("password", cfg.userInfo()).put("email", "bypass@localhost"));
                 out.put("settings", new JSONObject().put("servers", servers));
                 break;
@@ -319,7 +479,7 @@ public final class XrayEngine {
                 String password = ssPassword(cfg);
                 JSONArray servers = new JSONArray();
                 servers.put(new JSONObject()
-                        .put("address", cfg.host).put("port", cfg.port)
+                        .put("address", outHost).put("port", outPort)
                         .put("method", method != null ? method : "aes-256-gcm")
                         .put("password", password != null ? password : ""));
                 out.put("settings", new JSONObject().put("servers", servers));
@@ -342,7 +502,7 @@ public final class XrayEngine {
                 users.put(new JSONObject()
                         .put("id", v.optString("id")).put("alterId", 0).put("security", "auto"));
                 vnext.put(new JSONObject()
-                        .put("address", cfg.host).put("port", cfg.port).put("users", users));
+                        .put("address", outHost).put("port", outPort).put("users", users));
                 out.put("settings", new JSONObject().put("vnext", vnext));
                 out.put("streamSettings", buildStream(security, network, sni, fp, alpn,
                         allowInsecure, path, hostHeader, p));
@@ -526,7 +686,7 @@ public final class XrayEngine {
             // либо тем, что локальный SOCKS так и не открылся (это проверяет вызывающий).
             controller.startLoop(configJson, 0);
         } catch (Exception e) {
-            if (callback != null) callback.onError(String.valueOf(e.getMessage()));
+            if (callback != null) callback.onError(explainCoreError(e.getMessage()));
         }
     }
 
@@ -557,7 +717,7 @@ public final class XrayEngine {
                 c.stopLoop();
             } catch (Exception ignored) {
             }
-            throw new IllegalStateException("ядро не запустилось: " + e.getMessage(), e);
+            throw new IllegalStateException(explainCoreError(e.getMessage()), e);
         }
         return c;
     }
@@ -568,6 +728,32 @@ public final class XrayEngine {
             c.stopLoop();
         } catch (Exception ignored) {
         }
+    }
+
+    /**
+     * Короткое объяснение ошибки ядра. Цепочка «config error: infra/conf/serial: failed to
+     * parse json config > … > …» бесполезна в логе: оставляем суть и режем длину.
+     */
+    public static String explainCoreError(String message) {
+        if (message == null || message.trim().isEmpty()) return "ядро не приняло конфиг";
+        String m = message.trim();
+        String low = m.toLowerCase();
+        if (low.contains("vless without tls") || low.contains("trojan without tls")) {
+            return NO_TLS_REASON;
+        }
+        if (low.contains("reality only supports")) {
+            return "REALITY работает только с raw/xhttp/grpc";
+        }
+        if (low.contains("unknown security")) return "ядро не знает такого типа шифрования";
+        if (low.contains("unknown transport")) return "ядро не знает такого транспорта";
+        if (low.contains("removed") || low.contains("legacy xtls")) {
+            return "функция удалена из ядра Xray: " + m;
+        }
+        int pos = m.lastIndexOf("> ");
+        if (pos >= 0) m = m.substring(pos + 2).trim();
+        m = m.replace("config error: ", "").trim();
+        if (m.length() > 140) m = m.substring(0, 140) + "…";
+        return m;
     }
 
     private static String firstNonEmpty(String... values) {

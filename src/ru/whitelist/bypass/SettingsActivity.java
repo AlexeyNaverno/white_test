@@ -54,7 +54,7 @@ public class SettingsActivity extends Activity {
             editTorBridges, editTorExtra, editTorBridgeWait, editPingTargets, editHealthUrls,
             editLanes, editDpiSources;
     private Switch swDesync, swIpv6, swAutoSwitch, swBoot, swEmbedded, swDpiAutotune,
-            swTorFallback;
+            swTorFallback, swNoTls;
 
     private int dp(int v) {
         return (int) (v * getResources().getDisplayMetrics().density);
@@ -240,6 +240,18 @@ public class SettingsActivity extends Activity {
             }
         });
         root.addView(dpiProbe);
+
+        // --- ядро ---
+        section("Ядро Xray");
+        swNoTls = switchRow("Разрешать конфиги без TLS (через локальный ретранслятор)",
+                Prefs.allowNoTls(this));
+        note("Xray 26 отказывается поднимать VLESS/Trojan без TLS к публичному адресу: "
+                + "разрешены только приватные IP и локальные домены. Под это правило попадает "
+                + "больше половины публичных списков (ws за CDN, обычный tcp без tls). "
+                + "С включённой опцией такие конфиги тоже работают: ядро подключается к "
+                + "локальному ретранслятору (127.0.0.1), а тот отдаёт соединение настоящему "
+                + "серверу. Стоит одного лишнего локального хопа и только на таких конфигах. "
+                + "Выключено — их отсекает сразу, в логе одной строкой «Несовместимы с ядром».");
 
         // --- сеть ---
         section("Сеть");
@@ -552,7 +564,7 @@ public class SettingsActivity extends Activity {
         root.addView(browser);
 
         TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.1.5\n"
+        footer.setText("Обход Белых Списков 0.1.6\n"
                 + versionLine() + "\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");
         footer.setTextColor(TEXT_DIM);
@@ -718,6 +730,7 @@ public class SettingsActivity extends Activity {
         e.putString(Prefs.TOR_BRIDGES, normalizeLines(editTorBridges.getText().toString()));
         e.putString(Prefs.TOR_EXTRA_TORRC, editTorExtra.getText().toString().trim());
         e.putBoolean(Prefs.DESYNC_LINE, swDesync.isChecked());
+        e.putBoolean(Prefs.ALLOW_NO_TLS, swNoTls.isChecked());
         e.putBoolean(Prefs.IPV6, swIpv6.isChecked());
         e.putBoolean(Prefs.AUTO_SWITCH, swAutoSwitch.isChecked());
         e.putBoolean(Prefs.BOOT_CONNECT, swBoot.isChecked());

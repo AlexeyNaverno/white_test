@@ -63,6 +63,8 @@ public final class Prefs {
     public static final String CURRENT_HOST = "current_host";
     public static final String CURRENT_PORT = "current_port";
     public static final String POOL_AT = "pool_at";
+    /** Разрешать конфиги без TLS (они пойдут через локальный ретранслятор). */
+    public static final String ALLOW_NO_TLS = "allow_no_tls";
 
     // --- значения набора «Стандарт» (они же значения по умолчанию) ---
     /** Порог «рабочего» конфига: 32 кбит/с = 4 КБ/с. Белые списки и так медленные. */
@@ -76,6 +78,12 @@ public final class Prefs {
     /** DPI-обход линии включён по умолчанию. */
     public static final boolean DEFAULT_DESYNC_LINE = true;
     public static final boolean DEFAULT_DPI_AUTOTUNE = true;
+    /**
+     * По умолчанию — выключено: Xray 26 намеренно не поднимает VLESS/Trojan без TLS
+     * к публичному адресу, и включать обход этого правила без ведома пользователя нельзя.
+     * Включённый вариант не ломает ядро: outbound смотрит на loopback-ретранслятор.
+     */
+    public static final boolean DEFAULT_ALLOW_NO_TLS = false;
 
     /**
      * Одна рабочая стратегия DPI — та, что подставляется в линию до VPN-сервера.
@@ -278,6 +286,11 @@ public final class Prefs {
      */
     public static boolean desyncLine(Context c) {
         return get(c).getBoolean(DESYNC_LINE, DEFAULT_DESYNC_LINE);
+    }
+
+    /** Разрешить конфиги без TLS (через локальный ретранслятор внутри ядра). */
+    public static boolean allowNoTls(Context c) {
+        return get(c).getBoolean(ALLOW_NO_TLS, DEFAULT_ALLOW_NO_TLS);
     }
 
     public static String dpiStrategy(Context c) {

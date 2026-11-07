@@ -1,0 +1,4 @@
+• Speed tests are no longer wasted: configs Xray 26 refuses to load (VLESS/Trojan without TLS to a public address) no longer take a measurement lane — the log shows one line, "incompatible with the core: N".
+• Those configs work again with the new setting: Core Xray → "Allow configs without TLS (via a local relay)".
+• Core errors in the log are short now: the essence instead of the whole infra/conf/serial chain.
+• Links with security=true/false are no longer treated as incompatible; VLESS native encryption (encryption=…) is supported.

@@ -399,6 +399,14 @@ public class BypassVpnService extends VpnService {
                     return false;
                 }
             }
+            // Ядро примет не всё: без TLS к публичному адресу оно откажется (Xray 26).
+            // Если пользователь не разрешил ретранслятор — честно говорим об этом,
+            // а не ждём «ядро не открыло локальный SOCKS».
+            String bad = XrayEngine.compatProblem(cfg, Prefs.allowNoTls(this));
+            if (bad != null) {
+                lastError = bad;
+                return false;
+            }
             String json = XrayEngine.buildConfigJson(cfg, XRAY_PORT, false,
                     Prefs.vpnDns(this), desyncPort);
             XrayEngine.start(this, json, new XrayEngine.Callback() {
