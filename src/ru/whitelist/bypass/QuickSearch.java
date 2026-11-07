@@ -35,7 +35,12 @@ public final class QuickSearch {
     /** Сколько конфигов пингуем за один круг. */
     public static final int PING_BATCH = 150;
     /** Потолок реальных проверок за круг; остальных ЖИВЫХ переносим в следующий круг. */
-    public static final int PROBES_PER_ROUND = 40;
+    public static final int PROBES_PER_ROUND = 25;
+    /**
+     * Сколько конфигов из пула разрешено проверить в самом конце, когда новых не осталось.
+     * Пул обычно и есть ответ: конфиги там уже замерены, берём самые быстрые.
+     */
+    private static final int POOL_FALLBACK = 5;
     /** Сколько живых показываем в логе для наглядности. */
     private static final int SHOW_ALIVE = 8;
 
@@ -110,6 +115,7 @@ public final class QuickSearch {
         int nextIdx = 0;
         int round = 0;
         boolean torTried = false;
+        boolean poolTried = false;
         List<ProxyConfig> carry = new ArrayList<>();
 
         for (;;) {
@@ -157,6 +163,24 @@ public final class QuickSearch {
                     }
                     continue;
                 }
+                // Новых кандидатов не осталось. Прежде чем идти в Tor, смотрим в пул:
+                // там уже замеренные конфиги, и «быстрый поиск», который не находит
+                // ничего при непустом пуле, пользователю бесполезен.
+                if (!poolTried) {
+                    poolTried = true;
+                    List<ProxyConfig> fromPool = poolCandidates(c, inPool, POOL_FALLBACK);
+                    if (!fromPool.isEmpty()) {
+                        log.line("Новых конфигов нет — проверяю лучшие из пула: "
+                                + fromPool.size());
+                        Found hit = probeList(c, fromPool, log, min, minText, gateTimeout,
+                                fromPool.size());
+                        if (hit != null) return hit;
+                        if (ConfigRepository.isCancelled()) {
+                            log.line("Поиск остановлен");
+                            return null;
+                        }
+                    }
+                }
                 // источники кончились — один раз пробуем Tor
                 if (!torTried && !failed.isEmpty()) {
                     torTried = true;
@@ -179,7 +203,8 @@ public final class QuickSearch {
                         log.line("Tor не поднялся — продолжаю без него");
                     }
                 }
-                log.line("Кандидаты закончились: проверено " + nextIdx + ", рабочих нет");
+                log.line("Кандидаты закончились: проверено " + nextIdx + ", рабочих нет. "
+                        + "Соберите пул заново — источники не отдают новые списки");
                 return null;
             }
 
@@ -229,6 +254,23 @@ public final class QuickSearch {
             }
             log.line("Круг " + round + " без результата — дальше");
         }
+    }
+
+    /**
+     * Лучшие конфиги из пула: он отсортирован по скорости, поэтому просто берём первые
+     * limit штук, которые действительно лежат в пуле (ключи совпадают с inPool).
+     */
+    private static List<ProxyConfig> poolCandidates(Context c, java.util.Set<String> inPool,
+                                                    int limit) {
+        List<ProxyConfig> out = new ArrayList<>();
+        for (Pool.Entry e : Pool.load(c)) {
+            if (out.size() >= limit) break;
+            String key = ConfigRepository.canonicalKey(e.raw);
+            if (key == null || !inPool.contains(key)) continue;
+            ProxyConfig p = e.cfg();
+            if (p != null) out.add(p);
+        }
+        return out;
     }
 
     /** Проверить конфиги подряд (до первого рабочего). Пишет результат каждой проверки. */

@@ -24,8 +24,12 @@ public final class Probe {
     public static final int MIN_SAMPLE_BYTES = 8 * 1024;
     /** Сколько качаем за один замер (хватает, чтобы оценить и быстрый, и медленный канал). */
     public static final long MAX_SAMPLE_BYTES = 128 * 1024;
-    /** Сколько ждём, пока Xray откроет локальный SOCKS. */
-    public static final long SOCKS_WAIT_MS = 4000;
+    /**
+     * Сколько ждём, пока Xray откроет локальный SOCKS. 3000 мс: живой конфиг открывает
+     * SOCKS за первые сотни миллисекунд, а мёртвый всё равно не откроет — ждать дольше
+     * значит растягивать сбор пула на минуты.
+     */
+    public static final long SOCKS_WAIT_MS = 3000;
 
     /** Замер скорости: значение + чем именно он получен. */
     public static final class Speed {
@@ -134,9 +138,8 @@ public final class Probe {
         long bestBytes = 0;
         long bestMs = 0;
         int attempts = 0;
-        for (String url : Prefs.speedUrls(ctx)) {
+        for (String url : speedPlan(Prefs.speedUrls(ctx), maxUrls)) {
             if (ConfigRepository.isCancelled()) break;
-            if (attempts >= maxUrls) break;
             attempts++;
             NetChecker.SpeedResult r = NetChecker.downloadThroughSocks(
                     url, "127.0.0.1", socksPort, timeoutMs, MAX_SAMPLE_BYTES);
@@ -150,6 +153,39 @@ public final class Probe {
             if (best > 0) break; // первого успешного замера достаточно
         }
         return new Speed(best, bestUrl, bestBytes, bestMs, attempts);
+    }
+
+    /**
+     * Какие URL пробовать, когда попыток мало (отбраковка в поиске).
+     *
+     * Тонкость: первым в списке идёт список конфигов с GitHub — он заодно доказывает,
+     * что через конфиг доступен зарубежный источник. Но многие «белые» конфиги пускают
+     * только Cloudflare/CacheFly, а GitHub — нет. Если пробовать ровно первые N URL
+     * подряд, такие рабочие конфиги отбраковывались как мёртвые (это и было причиной
+     * «быстрый поиск ничего не находит»). Поэтому в план всегда попадает один
+     * «дружелюбный» источник с CDN.
+     */
+    static java.util.List<String> speedPlan(java.util.List<String> urls, int maxUrls) {
+        java.util.List<String> plan = new java.util.ArrayList<>();
+        if (urls == null || urls.isEmpty() || maxUrls <= 0) return plan;
+        plan.add(urls.get(0));
+        if (plan.size() < maxUrls) {
+            for (String u : urls) {
+                if (isCdnFriendly(u) && !plan.contains(u)) { plan.add(u); break; }
+            }
+        }
+        for (String u : urls) {
+            if (plan.size() >= maxUrls) break;
+            if (!plan.contains(u)) plan.add(u);
+        }
+        return plan;
+    }
+
+    /** Небольшие файлы Cloudflare/CacheFly доступны там, где GitHub уже закрыт. */
+    private static boolean isCdnFriendly(String url) {
+        if (url == null) return false;
+        String u = url.toLowerCase();
+        return u.contains("cloudflare") || u.contains("cachefly");
     }
 
     /** Скорость канала через уже поднятый SOCKS, КБ/с. -1 — данных не получили. */

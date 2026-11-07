@@ -50,6 +50,8 @@ public final class Prefs {
     /** Человеческий отчёт последней проверки мостов и источников через Tor. */
     public static final String TOR_REPORT = "tor_report";
     public static final String TOR_EXTRA_TORRC = "tor_extra_torrc";
+    /** Если VPN не отвечает — пускать трафик через Tor-мосты (по умолчанию включено). */
+    public static final String TOR_FALLBACK = "tor_fallback";
     public static final String CURRENT_RAW = "current_raw";
     public static final String CURRENT_NAME = "current_name";
     public static final String CURRENT_HOST = "current_host";
@@ -175,9 +177,12 @@ public final class Prefs {
         return out;
     }
 
-    /** Сколько ждём на один замер, мс. */
+    /**
+     * Сколько ждём на один замер, мс. По умолчанию 1500: рабочий конфиг отдаёт первые
+     * килобайты почти сразу, а ожидание «вдруг разгонится» только растягивает сбор пула.
+     */
     public static int gateTimeoutMs(Context c) {
-        return clamp(get(c).getInt(GATE_TIMEOUT_MS, 4000), 1500, 20000);
+        return clamp(get(c).getInt(GATE_TIMEOUT_MS, 1500), 800, 20000);
     }
 
     // --- источники ---
@@ -194,8 +199,9 @@ public final class Prefs {
         return clamp(get(c).getInt(PING_THREADS, 60), 1, 200);
     }
 
+    /** Таймаут пинга, мс. 1000 по умолчанию: нас интересуют только «более-менее рабочие». */
     public static int pingTimeoutMs(Context c) {
-        return clamp(get(c).getInt(PING_TIMEOUT_MS, 2500), 300, 15000);
+        return clamp(get(c).getInt(PING_TIMEOUT_MS, 1000), 300, 15000);
     }
 
     /** Цели TCP-пинга (host:port). Пусто/битые строки отбрасываются. */
@@ -368,6 +374,32 @@ public final class Prefs {
 
     public static long poolBuiltAt(Context c) { return get(c).getLong(POOL_AT, 0L); }
     public static void setPoolBuiltAt(Context c, long t) { get(c).edit().putLong(POOL_AT, t).apply(); }
+
+    // --- резервный режим через Tor ---
+
+    /**
+     * Если VPN-конфиги не отвечают — пробовать пустить трафик через Tor-мосты.
+     * По умолчанию включено: лучше медленный, но работающий канал, чем «нет связи».
+     */
+    public static boolean torFallback(Context c) {
+        return get(c).getBoolean(TOR_FALLBACK, true);
+    }
+
+    /**
+     * Разовая миграция значений, которые раньше записывались как «дефолт».
+     * Настройки сохраняют ВСЕ поля при нажатии «Сохранить», поэтому у тех, кто хоть раз
+     * открывал настройки, в файле лежали старые 4000/2500 мс — без миграции новые
+     * значения по умолчанию до них бы не доехали.
+     */
+    public static void migrate(Context c) {
+        SharedPreferences p = get(c);
+        if (p.getBoolean("migrated_timeouts_v2", false)) return;
+        SharedPreferences.Editor e = p.edit();
+        if (p.getInt(GATE_TIMEOUT_MS, 0) == 4000) e.putInt(GATE_TIMEOUT_MS, 1500);
+        if (p.getInt(PING_TIMEOUT_MS, 0) == 2500) e.putInt(PING_TIMEOUT_MS, 1000);
+        e.putBoolean("migrated_timeouts_v2", true);
+        e.apply();
+    }
 
     // --- утилиты ---
 
