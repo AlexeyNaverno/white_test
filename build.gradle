@@ -4,7 +4,7 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.7.3'
+        classpath 'com.android.tools.build:gradle:9.4.1'
     }
 }
 
@@ -84,8 +84,10 @@ android {
         checkReleaseBuilds false
     }
 
-    packagingOptions {
+    packaging {
         jniLibs {
+            // .so лежат распакованными: byedpi грузится из нативного каталога и
+            // обращается к geoip/geosite из assets по обычным путям.
             useLegacyPackaging true
         }
     }
