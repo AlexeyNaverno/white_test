@@ -70,12 +70,11 @@ jobs:
           tail -n 40 /tmp/build.log >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           # Аннотации видны в `gh run view` — логи иначе недоступны из API
-          n=0
-          grep -nE "error:|Error:|error \[|FAILED|FAILURE|Caused by|fatal:|\* What went wrong" /tmp/build.log \
-            | tail -12 | while IFS= read -r line; do
-              echo "::error title=build::$(echo "$line" | tr '\n' ' ' | cut -c1-900)"
-            done
-
+          awk '/What went wrong/{flag=1} flag{print; n++} n>18{exit}' /tmp/build.log > /tmp/why.txt || true
+          [ -s /tmp/why.txt ] || tail -n 20 /tmp/build.log > /tmp/why.txt
+          while IFS= read -r line; do
+            [ -n "$line" ] && echo "::error title=build::$(echo "$line" | tr -s ' ' | cut -c1-900)"
+          done < /tmp/why.txt
       - name: Загрузить лог сборки
         if: failure()
         uses: actions/upload-artifact@v4
