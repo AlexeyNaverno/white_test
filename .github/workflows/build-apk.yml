@@ -24,23 +24,25 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Android SDK (platform 37, build-tools 35.0.0, NDK 26.3)
+      # Свежий cmdline-tools обязателен: старый индекс SDK не знает пакета
+      # platforms;android-37.0 (он нужен из-за aar-metadata зависимостей).
+      - name: Android SDK (platform 37, build-tools 35.0.0)
+        uses: android-actions/setup-android@v4
+        with:
+          log-accepted-android-sdk-licenses: false
+          cmdline-tools-version: '14742923'
+          packages: 'platforms;android-37.0 build-tools;35.0.0 platform-tools'
+
+      - name: Android NDK 26.3
         run: |
-          # На образе runner уже есть SDK: ставим в него нужные пакеты и выставляем ОДИН
-          # путь (AGP падает, если ANDROID_HOME и ANDROID_SDK_ROOT указывают в разные места).
-          SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
-          SDKM="$SDK/cmdline-tools/latest/bin/sdkmanager"
-          [ -x "$SDKM" ] || SDKM="$(find "$SDK" -name sdkmanager -type f | head -1)"
+          # Один путь к SDK: AGP падает, если ANDROID_HOME и ANDROID_SDK_ROOT разные.
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKM" --licenses > /dev/null || true
-          # Платформа 37 нужна из-за aar-metadata зависимостей; имя пакета отличается
-          # между ревизиями командных инструментов — пробуем оба варианта.
-          "$SDKM" "platforms;android-37.0" || "$SDKM" "platforms;android-37"
-          "$SDKM" "build-tools;35.0.0" "ndk;26.3.11579264"
-          echo "ANDROID_SDK=$SDK" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=$SDK/ndk/26.3.11579264" >> "$GITHUB_ENV"
-          ls "$SDK/ndk"
+          "$SDKM" --channel=0 --install "ndk;26.3.11579264"
+          echo "ANDROID_SDK=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> "$GITHUB_ENV"
+          ls "$ANDROID_HOME/platforms"
 
       - name: Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
