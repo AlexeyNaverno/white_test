@@ -1,0 +1,28 @@
+Connects your phone to the internet through public VPN configurations
+(VLESS, Trojan, Shadowsocks, VMess) using the bundled Xray core. Config lists are
+downloaded from open repositories, verified by real downloads and stored in a pool of
+working configs — the fastest one is always used first.
+
+There are no servers of our own: no subscriptions, no analytics, no data sent to a
+"vendor" service. The only network traffic is to public config lists and to the servers
+listed in them.
+
+Three actions:
+• Connect — picks the fastest config from the pool, verifies it and brings up the tunnel.
+• Quick search — finds one working VPN and remembers it.
+• Build pool — refreshes all lists, pings and measures the speed of live configs.
+
+Highlights:
+• Speed, not ping, decides: the pool is sorted by KB/s.
+• DPI bypass of the line (ciadpi) with automatic strategy selection for networks where a
+  direct connection fails.
+• Three built-in settings presets: "Standard" (with DPI bypass), "Wi-Fi" (fast measuring,
+  no DPI) and "White lists" (low threshold, white-list sources); custom presets can be
+  imported from .json.
+• Tor fallback with bridges, enabled only when no VPN config answers. Bridges are tested
+  and ranked by speed.
+• Built-in single-tab browser that works only through Tor with bridges.
+• Settings and the console can be exported to .json for troubleshooting.
+• All cores (Xray, ByeDPI, Tor) run locally; no root required.
+
+License: GPL-3.0. Source code: https://github.com/AlexeyNaverno/white_test

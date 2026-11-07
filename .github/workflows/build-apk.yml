@@ -15,13 +15,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # нативные исходники (ciadpi, hev-socks5-tunnel, Xray-core) — git-сабмодули
+          submodules: recursive
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Android SDK (platform 36 + build-tools 36.0.0)
+      - name: Android SDK (platform 35, build-tools 35.0.0, NDK 26.3)
         run: |
           SDK="$HOME/android-sdk"
           mkdir -p "$SDK/cmdline-tools"
@@ -32,29 +35,36 @@ jobs:
           chmod -R +x "$SDK/cmdline-tools/latest/bin" "$SDK/cmdline-tools/latest/lib"
           yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --licenses > /dev/null
           "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" \
-            "platforms;android-36" "build-tools;36.0.0"
+            "platforms;android-35" "build-tools;35.0.0" "ndk;26.3.11579264"
           echo "ANDROID_SDK=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$SDK/ndk/26.3.11579264" >> "$GITHUB_ENV"
 
-      - name: Зависимости (libv2ray / tor-android / jtorctl / kotlin-stdlib / lbc)
-        run: |
-          bash tools/fetch_deps.sh "$GITHUB_WORKSPACE/deps"
-          ls -la deps
+      - name: Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
 
-      - name: Версия из манифеста
+      - name: Xray-core (libv2ray.aar)
         run: |
-          V=$(grep -oP 'android:versionName="\K[^"]+' AndroidManifest.xml)
+          bash tools/fetch-libv2ray.sh
+          ls -la libs
+
+      - name: Версия из gradle.properties
+        run: |
+          V=$(grep -oP '^appVersionName=\K.*' gradle.properties)
           echo "VERSION=$V" >> "$GITHUB_ENV"
           echo "Версия: $V"
 
-      - name: Сборка APK
+      - name: Сборка APK (Gradle + NDK)
         run: |
           set -o pipefail
-          ABIS="armeabi-v7a arm64-v8a" bash build.sh "$ANDROID_SDK" "$GITHUB_WORKSPACE/deps" 2>&1 | tee /tmp/build.log
+          gradle --no-daemon assembleRelease 2>&1 | tee /tmp/build.log
 
       - name: Отладка (лог сборки в отдельную ветку)
         if: failure()
         run: |
-          tail -c 20000 /tmp/build.log > /tmp/tail.txt || true
+          tail -c 30000 /tmp/build.log > /tmp/tail.txt || true
           git config user.name "ci"; git config user.email "ci@localhost"
           mkdir -p ci-log && cp /tmp/tail.txt ci-log/build.log
           git checkout -b "ci-log-${{ github.run_id }}"
@@ -67,7 +77,9 @@ jobs:
           set -euo pipefail
           BT=$(ls -d "$ANDROID_SDK"/build-tools/* | sort -V | tail -1)
           export PATH="$BT:$PATH"
-          mv WhitelistBypass.apk "WhitelistBypass-$VERSION.apk"
+          SRC_APK=$(find build/outputs/apk/release -name '*.apk' | head -1)
+          [ -n "$SRC_APK" ] || { echo "::error::Gradle не собрал APK"; exit 1; }
+          mv "$SRC_APK" "WhitelistBypass-$VERSION.apk"
           APK="WhitelistBypass-$VERSION.apk"
           sha256sum "$APK" | tee apk.sha256
           {
@@ -75,7 +87,7 @@ jobs:
             aapt2 dump badging "$APK" | grep -E "^package:|application-label|sdkVersion|targetSdkVersion|native-code"
             echo
             echo "### содержимое APK (фрагмент)"
-            unzip -l "$APK" | grep -E "classes.dex|lib/.*\\.so|resources.arsc|AndroidManifest" | awk '{print $1, $4}'
+            unzip -l "$APK" | grep -E "classes.dex|lib/.*\.so|resources.arsc|AndroidManifest" | awk '{print $1, $4}'
             echo
             echo "### подпись"
             apksigner verify --print-certs "$APK" | grep -E "Verifies|Signer #1 certificate (DN|SHA-256)"
@@ -118,7 +130,7 @@ jobs:
           echo "Релиз: $TITLE"
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && gh release delete "$GITHUB_REF_NAME" -y || true
           { tail -n +2 "$NOTES"
-            printf '\n### Сборка\n\nGitHub Actions, коммит `%s`: JDK 17, Android SDK 36 (build-tools 36.0.0), подпись debug-ключом из репозитория.\n\n' "$GITHUB_SHA"
+            printf '\n### Сборка\n\nGitHub Actions, коммит `%s`: JDK 17, Android SDK 35 (build-tools 35.0.0), NDK 26.3, Gradle 8.9; подпись debug-ключом из репозитория.\n\n' "$GITHUB_SHA"
             printf '```\n'; cat build-report.txt; printf '```\n'
           } > /tmp/body.md
           gh release create "$GITHUB_REF_NAME" \

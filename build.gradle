@@ -1,0 +1,102 @@
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.7.3'
+    }
+}
+
+apply plugin: 'com.android.application'
+
+// Версия — из gradle.properties, чтобы CI и F-Droid читали одно и то же место.
+def appVersionCode = (project.findProperty('appVersionCode') ?: '15').toInteger()
+def appVersionName = project.findProperty('appVersionName') ?: '0.1.5'
+def abiList = (project.findProperty('abis') ?: 'armeabi-v7a,arm64-v8a').split(',')
+
+android {
+    namespace 'ru.whitelist.bypass'
+    compileSdk 35
+    // NDK нужен для сборки libbyedpi.so из исходников (ciadpi + hev-socks5-tunnel).
+    ndkVersion '26.3.11579264'
+
+    defaultConfig {
+        applicationId 'ru.whitelist.bypass'
+        minSdk 24
+        targetSdk 35
+        versionCode appVersionCode
+        versionName appVersionName
+        ndk {
+            abiFilters(*abiList)
+        }
+        externalNativeBuild {
+            ndkBuild {
+                arguments 'APP_PLATFORM=android-24'
+            }
+        }
+    }
+
+    // Дерево исходников осталось «плоским» (src/, res/, assets/, AndroidManifest.xml),
+    // поэтому просто указываем Gradle, где что лежит.
+    sourceSets {
+        main {
+            manifest.srcFile 'AndroidManifest.xml'
+            java.srcDirs = ['src']
+            res.srcDirs = ['res']
+            assets.srcDirs = ['assets']
+            // предсобранных .so нет: всё нативное собирается из исходников ниже
+            jniLibs.srcDirs = []
+        }
+    }
+
+    externalNativeBuild {
+        ndkBuild {
+            path 'native/Android.mk'
+        }
+    }
+
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+}
+
+dependencies {
+    // Xray-core: libv2ray.aar собирается из исходников (AndroidLibXrayLite, git-сабмодуль
+    // native/libv2ray) скриптом tools/build-libv2ray.sh — предсобранный бинарник в дереве
+    // не хранится. Для локальной сборки достаточно tools/fetch-libv2ray.sh (готовый AAR).
+    implementation files('libs/libv2ray.aar')
+    implementation 'info.guardianproject:tor-android:0.4.9.13.2'
+    implementation 'info.guardianproject:jtorctl:0.4.5.7'
+    implementation 'androidx.localbroadcastmanager:localbroadcastmanager:1.1.0'
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:2.2.10'
+}

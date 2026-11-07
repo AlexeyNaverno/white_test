@@ -1,0 +1,53 @@
+# Черновик рецепта для fdroiddata (https://gitlab.com/fdroid/fdroiddata/-/blob/master/metadata/).
+# Кладётся как metadata/ru.whitelist.bypass.yml в fdroiddata; здесь — как часть репозитория,
+# чтобы рецепт и код правились вместе. Подробности и оставшиеся шаги — в F-DROID.md.
+Categories:
+  - Internet
+License: GPL-3.0-or-later
+AuthorName: Alexey Naverno
+WebSite: https://github.com/AlexeyNaverno/white_test
+SourceCode: https://github.com/AlexeyNaverno/white_test
+IssueTracker: https://github.com/AlexeyNaverno/white_test/issues
+Changelog: https://github.com/AlexeyNaverno/white_test/releases
+
+# Приложение по своей природе ходит к сторонним VPN-серверам из публичных списков.
+AntiFeatures:
+  NonFreeNet:
+    en-US: Connects to VPN servers of third parties taken from public config lists.
+    ru-RU: Подключается к сторонним VPN-серверам из публичных списков конфигураций.
+
+Description: |-
+  Подключает телефон к интернету через публичные VPN-конфигурации (VLESS, Trojan,
+  Shadowsocks, VMess) на встроенном ядре Xray. Списки конфигов берутся из открытых
+  репозиториев, проверяются реальной загрузкой и складываются в пул рабочих —
+  подключение всегда идёт с самого быстрого.
+
+  Своих серверов у приложения нет: без подписок, аналитики и телеметрии. DPI-обход
+  линии (ciadpi) включён по умолчанию, есть резервный канал через Tor с мостами и
+  встроенный браузер, работающий только через Tor.
+
+RepoType: git
+Repo: https://github.com/AlexeyNaverno/white_test.git
+
+Builds:
+  - versionName: 0.1.5
+    versionCode: 15
+    commit: v0.1.5
+    # Исходники ciadpi, hev-socks5-tunnel и Xray-core подключены сабмодулями.
+    submodules: true
+    sudo:
+      - apt-get update || apt-get update
+      - apt-get install -y golang-go
+    ndk: 26.3.11579264
+    gradle:
+      - assembleRelease
+    # Xray-core собирается из исходников сабмодуля тем же gomobile-вызовом, что и в апстриме.
+    prebuild: |
+      export ANDROID_NDK_HOME=$$NDK$$
+      bash tools/build-libv2ray.sh
+    output: build/outputs/apk/release/WhitelistBypass-release.apk
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags
+CurrentVersion: 0.1.5
+CurrentVersionCode: 15
