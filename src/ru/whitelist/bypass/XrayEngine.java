@@ -97,13 +97,12 @@ public final class XrayEngine {
             if (enc != null && !enc.isEmpty() && !"none".equalsIgnoreCase(enc)) {
                 return "vless: encryption=" + enc + " не поддерживается";
             }
+            // пустой id отсекаем, но формат не проверяем: Xray переводит строку в UUID сам
             if (cfg.userInfo() == null || cfg.userInfo().isEmpty()) return "vless: нет id";
         }
         if ("vmess".equals(cfg.scheme)) {
-            // Xray принимает не только UUID: любую строку он сам переводит в UUID v5,
-            // поэтому id вида «my-password» — рабочий конфиг, а не ошибка.
-            String id = vmessJson(cfg).optString("id");
-            if (id == null || id.isEmpty()) return "vmess: нет id";
+            // В vmess не проверяем ни id, ни разбор base64: если ссылка битая, это скажет
+            // само ядро («ядро не запустилось»), а ложных отказов быть не должно.
         }
         if ("ss".equals(cfg.scheme) || "shadowsocks".equals(cfg.scheme)) {
             String method = ssMethod(cfg);
@@ -316,20 +315,55 @@ public final class XrayEngine {
         return out;
     }
 
+    /**
+     * Разбор vmess-ссылки: base64 от JSON.
+     *
+     * Раньше здесь была ошибка в добивке «=»: для строк, чья длина не кратна 4 на 3,
+     * добавлялось три «=» вместо одного, декодирование падало, JSON получался пустым —
+     * и такой конфиг объявлялся «vmess: нет id», хотя он рабочий. Именно из-за этого
+     * «Собрать пул» массово отбрасывал vmess-конфиги на этапе замера скорости.
+     */
     private static JSONObject vmessJson(ProxyConfig cfg) {
+        String raw = cfg == null || cfg.raw == null ? "" : cfg.raw.trim();
+        int idx = raw.indexOf("://");
+        if (idx < 0) return new JSONObject();
+        String body = raw.substring(idx + 3);
+        // отрезаем и #название, и ?параметры — в обоих случаях дальше base64 уже нет
+        int cut = body.length();
+        int hash = body.indexOf('#');
+        if (hash >= 0) cut = hash;
+        int q = body.indexOf('?');
+        if (q >= 0 && q < cut) cut = q;
+        body = body.substring(0, cut).trim();
         try {
-            String b64 = cfg.raw.substring(cfg.raw.indexOf("://") + 3);
-            int hash = b64.indexOf('#');
-            if (hash >= 0) b64 = b64.substring(0, hash);
-            String s = b64.trim().replace('-', '+').replace('_', '/');
-            int pad = s.length() % 4;
-            if (pad > 0) s = s + "=====".substring(0, pad);
-            String json = new String(android.util.Base64.decode(s, android.util.Base64.DEFAULT),
-                    java.nio.charset.StandardCharsets.UTF_8);
+            byte[] data = base64(body);
+            String json = new String(data, java.nio.charset.StandardCharsets.UTF_8);
+            int brace = json.indexOf('{');
+            if (brace > 0) json = json.substring(brace);
+            int end = json.lastIndexOf('}');
+            if (end > 0) json = json.substring(0, end + 1);
             return new JSONObject(json);
         } catch (Exception e) {
             return new JSONObject();
         }
+    }
+
+    /** base64 с правильной добивкой: 2 символа → «==», 3 символа → «=». */
+    private static byte[] base64(String s) {
+        String t = s.replace('-', '+').replace('_', '/');
+        StringBuilder clean = new StringBuilder(t.length());
+        for (int i = 0; i < t.length(); i++) {
+            char ch = t.charAt(i);
+            if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
+                    || (ch >= '0' && ch <= '9') || ch == '+' || ch == '/') {
+                clean.append(ch);
+            }
+        }
+        String v = clean.toString();
+        int pad = v.length() % 4;
+        if (pad == 2) v = v + "==";
+        else if (pad == 3) v = v + "=";
+        return android.util.Base64.decode(v, android.util.Base64.DEFAULT);
     }
 
     private static JSONObject buildStream(String security, String network, String sni, String fp,

@@ -150,6 +150,15 @@ public final class PoolIo {
             res.cancelled = true;
         }
 
+        if (passed.isEmpty() && !ping.alive.isEmpty() && !ConfigRepository.isCancelled()) {
+            say(log, "Параллельный замер пуст — проверяю первые 20 по одному");
+            List<Pool.Entry> again = Probe.measureSequential(c, ping.alive, 20);
+            say(log, "По одному: рабочих " + again.size());
+            synchronized (passed) {
+                passed.addAll(again);
+            }
+        }
+
         // --- 3) в пул: старое + новое, без дублей
         List<Pool.Entry> merged = new ArrayList<>(Pool.load(c));
         java.util.Set<String> mergedKeys = new java.util.HashSet<>();
