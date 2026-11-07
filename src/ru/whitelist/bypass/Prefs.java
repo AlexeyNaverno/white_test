@@ -19,7 +19,7 @@ public final class Prefs {
     public static final String SOURCES = "sources";
     /** Порог «рабочего» конфига в КИЛОБИТАХ в секунду (128 по умолчанию = 16 КБ/с). */
     public static final String MIN_SPEED_KBIT = "min_speed_kbit";
-    public static final String SPEED_URLS = "speed_urls_v2";
+    public static final String SPEED_URLS = "speed_urls_v3";
     public static final String PING_THREADS = "ping_threads";
     public static final String PING_TIMEOUT_MS = "ping_timeout_ms";
     /** Цели TCP-пинга «есть ли вообще интернет» (host:port, по одной на строку). */
@@ -107,11 +107,11 @@ public final class Prefs {
      * Проверяются параллельно, поэтому «медленный, но живой» канал виден сразу.
      */
     public static final String[] DEFAULT_PING_TARGETS = {
-            "github.com:443",
-            "www.google.com:443",
-            "www.youtube.com:443",
-            "speed.cloudflare.com:443",
-            "ya.ru:443"
+            "discord.com:443",
+            "www.instagram.com:443",
+            "x.com:443",
+            "www.facebook.com:443",
+            "www.youtube.com:443"
     };
 
     /**
@@ -119,21 +119,26 @@ public final class Prefs {
      * Достаточно ответа любого — один сайт может быть недоступен по своим причинам.
      */
     public static final String[] DEFAULT_HEALTH_URLS = {
-            "https://www.google.com/generate_204",
-            "https://github.com/",
+            "https://discord.com/",
+            "https://www.instagram.com/",
+            "https://x.com/",
             "https://www.youtube.com/",
-            "https://speed.cloudflare.com/__down?bytes=65536",
-            "https://ya.ru/"
+            "https://speed.cloudflare.com/__down?bytes=65536"
     };
 
     /** Несколько резервных DNS: первый — основной, остальные — на случай перехвата. */
     public static final String DEFAULT_DNS = "1.1.1.1, 8.8.8.8, 9.9.9.9";
 
     /** Файлы по 1 МБ с иностранных CDN — по ним измеряется скорость канала. */
+    /**
+     * Замер скорости на маленьких файлах: 32 и 128 КБ хватает, чтобы отличить живой канал
+     * от мёртвого, а ждать приходится в разы меньше, чем на мегабайтных.
+     */
     public static final String[] DEFAULT_SPEED_URLS = {
-            "https://speed.cloudflare.com/__down?bytes=1048576",
-            "https://proof.ovh.net/files/1Mb.dat",
-            "https://cachefly.cachefly.net/1mb.test"
+            "https://speed.cloudflare.com/__down?bytes=32768",
+            "https://speed.cloudflare.com/__down?bytes=131072",
+            "https://proof.ovh.net/files/100Kb.dat",
+            "http://cachefly.cachefly.net/100kb.test"
     };
 
     public static SharedPreferences get(Context ctx) {
@@ -170,7 +175,7 @@ public final class Prefs {
 
     /** Сколько ждём на один замер, мс. */
     public static int gateTimeoutMs(Context c) {
-        return clamp(get(c).getInt(GATE_TIMEOUT_MS, 6000), 2000, 20000);
+        return clamp(get(c).getInt(GATE_TIMEOUT_MS, 4000), 1500, 20000);
     }
 
     // --- источники ---
@@ -211,7 +216,7 @@ public final class Prefs {
 
     /** Сколько экземпляров ядра мерить скорость параллельно. */
     public static int speedLanes(Context c) {
-        return clamp(get(c).getInt(SPEED_LANES, 3), 1, 4);
+        return clamp(get(c).getInt(SPEED_LANES, 4), 1, 4);
     }
 
     /** «512 КБ/с (4096 кбит/с)» — чтобы единицы не путались. */
@@ -229,8 +234,9 @@ public final class Prefs {
     // --- DPI на линии ---
 
     /** Пробовать DPI-обход линии (ciadpi) для конфигов, не вышедших напрямую. */
+    /** DPI-обход линии по умолчанию выключен: включается галочкой в настройках. */
     public static boolean desyncLine(Context c) {
-        return get(c).getBoolean(DESYNC_LINE, true);
+        return get(c).getBoolean(DESYNC_LINE, false);
     }
 
     public static String dpiStrategy(Context c) {
@@ -246,8 +252,9 @@ public final class Prefs {
         return out;
     }
 
+    /** Автоподбор стратегий тоже только вместе с DPI-обходом: без него он не запускается. */
     public static boolean dpiAutotune(Context c) {
-        return get(c).getBoolean(DPI_AUTOTUNE, true);
+        return get(c).getBoolean(DPI_AUTOTUNE, false);
     }
 
     /** Адреса, по которым проверяется, пробивает ли стратегия DPI блокировку. */

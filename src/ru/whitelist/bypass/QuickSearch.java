@@ -49,6 +49,19 @@ public final class QuickSearch {
         }
     }
 
+    /** Убирает из очереди то, что уже в пуле: такие конфиги проверяет только «Собрать пул». */
+    private static List<ProxyConfig> withoutPool(List<ProxyConfig> queue,
+                                                 java.util.Set<String> inPool) {
+        if (inPool.isEmpty()) return queue;
+        List<ProxyConfig> out = new ArrayList<>();
+        for (ProxyConfig p : queue) {
+            String key = ConfigRepository.canonicalKey(p.raw);
+            if (key != null && inPool.contains(key)) continue;
+            out.add(p);
+        }
+        return out;
+    }
+
     public static Found find(Context c, Log log) {
         final int min = Prefs.minSpeedKbps(c);
         final String minText = Prefs.minSpeedText(c);
@@ -71,24 +84,23 @@ public final class QuickSearch {
         }
         if (ConfigRepository.isCancelled()) return null;
 
-        // --- 2) лучшие из пула: обычно одной проверки достаточно
-        List<Pool.Entry> pool = Pool.load(c);
-        for (int i = 0; i < Math.min(3, pool.size()); i++) {
-            if (ConfigRepository.isCancelled()) return null;
-            ProxyConfig cfg = pool.get(i).cfg();
-            if (cfg == null) continue;
-            log.line("Проверка пула " + (i + 1) + "/" + Math.min(3, pool.size())
-                    + ": " + truncate(cfg.name, 45) + " (был " + Prefs.speedText(pool.get(i).kbps) + ")");
-            Probe.Result r = Probe.measureConfig(c, cfg, gateTimeout);
-            log.line("  → " + r.text());
-            if (r.ok && r.kbps >= min) return new Found(cfg, r.kbps);
-        }
+        // --- 2) пул НЕ перепроверяем: это делает «Собрать пул» (и выкидывает мёртвое).
+        // Быстрый поиск нужен, чтобы добавить ещё один вариант — значит, ищем только новое.
+        java.util.Set<String> inPool = Pool.keySet(c);
+        log.line(inPool.isEmpty()
+                ? "Пул пуст — ищу среди всех конфигов"
+                : "В пуле уже " + inPool.size() + " конфигов: их не перепроверяю, ищу новые");
 
         // --- 3) круги по спискам с ленивой подгрузкой источников
         Map<String, Boolean> seen = new LinkedHashMap<>();
         List<ProxyConfig> queue = new ArrayList<>();
         addAll(queue, seen, ConfigRepository.downloaded(c));
         addAll(queue, seen, ConfigRepository.embedded(c));
+        int beforeFilter = queue.size();
+        queue = withoutPool(queue, inPool);
+        if (beforeFilter > queue.size()) {
+            log.line("Уже в пуле: " + (beforeFilter - queue.size()) + " — пропускаю");
+        }
         log.line("Сначала перебираю локальный список: " + queue.size()
                 + " конфигов (источники — только когда он кончится)");
 
@@ -138,7 +150,8 @@ public final class QuickSearch {
                     } else {
                         List<ProxyConfig> fresh = new ArrayList<>();
                         addAll(fresh, seen, ConfigRepository.downloaded(c));
-                        queue.addAll(fresh);   // seen уже отфильтровал дубли
+                        fresh = withoutPool(fresh, inPool);
+                        queue.addAll(fresh);   // seen уже отфильтровал дубли, withoutPool — пул
                         log.line("  новых конфигов: " + added + " (всего в хранилище "
                                 + ConfigRepository.countDownloaded(c) + ")");
                     }
@@ -156,6 +169,7 @@ public final class QuickSearch {
                             if (added > 0) {
                                 List<ProxyConfig> fresh = new ArrayList<>();
                                 addAll(fresh, seen, ConfigRepository.downloaded(c));
+                                fresh = withoutPool(fresh, inPool);
                                 queue.addAll(fresh);
                             }
                         }

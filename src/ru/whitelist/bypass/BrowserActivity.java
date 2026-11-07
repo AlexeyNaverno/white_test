@@ -60,7 +60,7 @@ import java.util.Map;
  */
 public class BrowserActivity extends Activity {
 
-    private static final int BG = 0xFF0E141B;
+    private static final int BG = 0xFF000000;
     private static final int TEXT = 0xFFE8EEF5;
     private static final int TEXT_DIM = 0xFF8CA3B8;
     private static final int ACCENT = 0xFF3DDC84;
@@ -153,7 +153,7 @@ public class BrowserActivity extends Activity {
         ws.setUseWideViewPort(true);
         ws.setBuiltInZoomControls(false);
         ws.setSupportMultipleWindows(false);
-        ws.setUserAgentString(ws.getUserAgentString() + " WhitelistBypass/0.0.9");
+        ws.setUserAgentString(ws.getUserAgentString() + " WhitelistBypass/0.1.0");
         web.setWebViewClient(new WebViewClient() {
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 if (url != null && !url.startsWith("about:")) urlBar.setText(url);
@@ -385,7 +385,7 @@ public class BrowserActivity extends Activity {
             conn.setReadTimeout(30000);
             conn.setInstanceFollowRedirects(false);
             conn.setRequestProperty("User-Agent",
-                    "Mozilla/5.0 (Linux; Android) WhitelistBypass/0.0.9");
+                    "Mozilla/5.0 (Linux; Android) WhitelistBypass/0.1.0");
             conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,*/*");
             conn.setRequestProperty("Accept-Language", "ru-RU,ru;q=0.9,en;q=0.8");
             int code = conn.getResponseCode();
@@ -446,7 +446,7 @@ public class BrowserActivity extends Activity {
     private String infoPage(String title, String text) {
         return "<!doctype html><html><head><meta charset=\"utf-8\">"
                 + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>"
-                + "<body style=\"margin:0;padding:24px;background:#0E141B;color:#E8EEF5;"
+                + "<body style=\"margin:0;padding:24px;background:#000000;color:#E8EEF5;"
                 + "font-family:sans-serif;font-size:15px;line-height:1.45\">"
                 + "<div style=\"font-size:18px;margin-bottom:10px;color:#3DDC84\">" + title + "</div>"
                 + "<div style=\"color:#8CA3B8\">" + text + "</div>"
@@ -524,7 +524,7 @@ public class BrowserActivity extends Activity {
         b.setTextSize(14);
         b.setAllCaps(false);
         b.setTextColor(color);
-        b.setBackgroundColor(0xFF16202B);
+        b.setBackgroundColor(0xFF0F151B);
         b.setPadding(dp(8), dp(4), dp(8), dp(4));
         b.setMinHeight(dp(34));
         b.setMinimumWidth(dp(40));

@@ -21,11 +21,11 @@ public final class Probe {
     private Probe() {}
 
     /** Меньше этого объёма — оценка скорости недостоверна. */
-    public static final int MIN_SAMPLE_BYTES = 64 * 1024;
+    public static final int MIN_SAMPLE_BYTES = 24 * 1024;
     /** Сколько качаем за один замер (хватает, чтобы оценить и быстрый, и медленный канал). */
-    public static final long MAX_SAMPLE_BYTES = 512 * 1024;
+    public static final long MAX_SAMPLE_BYTES = 128 * 1024;
     /** Сколько ждём, пока Xray откроет локальный SOCKS. */
-    public static final long SOCKS_WAIT_MS = 6000;
+    public static final long SOCKS_WAIT_MS = 4000;
 
     /** Замер скорости: значение + чем именно он получен. */
     public static final class Speed {

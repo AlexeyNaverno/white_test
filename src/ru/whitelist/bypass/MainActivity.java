@@ -40,8 +40,9 @@ public class MainActivity extends Activity {
 
     private static final int REQ_VPN = 100;
 
-    private static final int SURFACE = 0xFF161F2A;
-    private static final int SURFACE2 = 0xFF1E2A38;
+    private static final int BG = 0xFF000000;
+    private static final int SURFACE = 0xFF0A0E13;
+    private static final int SURFACE2 = 0xFF121A22;
     private static final int ACCENT = 0xFF3DDC84;
     private static final int TEXT = 0xFFE8EEF5;
     private static final int TEXT_DIM = 0xFF8CA3B8;
@@ -49,11 +50,15 @@ public class MainActivity extends Activity {
     private static final int ORANGE = 0xFFFFAB40;
 
     /** Сколько живых конфигов «вживую» проверяем при сборе пула (дольше — не быстрее). */
-    private static final int MAX_SPEED_TESTS = 600;
+    private static final int MAX_SPEED_TESTS = 300;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
 
     private TextView statusPill, poolText, logText;
+    private ScrollView logScroll;
+    /** Полный лог: в консоль попадает последнее, но история остаётся — её можно листать. */
+    private final StringBuilder logBuffer = new StringBuilder();
+    private static final int LOG_MAX_CHARS = 40000;
     private Button powerButton, btnQuick, btnPool, btnSettings;
     private BroadcastReceiver receiver;
 
@@ -212,7 +217,7 @@ public class MainActivity extends Activity {
         card.addView(poolText);
         root.addView(card);
 
-        // лог
+        // лог: фиксированная высота + ползунок прокрутки, чтобы можно было листать вверх
         logText = new TextView(this);
         logText.setText("Лог: готов");
         logText.setTextSize(10);
@@ -220,13 +225,21 @@ public class MainActivity extends Activity {
         logText.setTextColor(TEXT_DIM);
         logText.setBackgroundColor(SURFACE);
         logText.setPadding(dp(10), dp(10), dp(10), dp(10));
-        logText.setMinLines(3);
-        logText.setMaxLines(12);
+        logText.setTextIsSelectable(true);
+
+        logScroll = new ScrollView(this);
+        logScroll.setBackgroundColor(SURFACE);
+        logScroll.addView(logText, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        logScroll.setVerticalScrollBarEnabled(true);
+        logScroll.setScrollbarFadingEnabled(false);
+        logScroll.setScrollBarStyle(View.SCROLLBARS_INSIDE_INSET);
+        logScroll.setFillViewport(true);
         LinearLayout.LayoutParams logLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(170));
         logLp.topMargin = dp(14);
-        logText.setLayoutParams(logLp);
-        root.addView(logText);
+        logScroll.setLayoutParams(logLp);
+        root.addView(logScroll);
 
         registerStatusReceiver();
         requestNotificationPermission();
@@ -482,7 +495,7 @@ public class MainActivity extends Activity {
         searching = true;
         ConfigRepository.clearCancel();
         setBusy(true, "Поиск…");
-        uiLog("Быстрый поиск: сеть → пул → круги по спискам (до первого рабочего)");
+        uiLog("Быстрый поиск: сеть → круги по новым конфигам (пул не перепроверяю)");
 
         new Thread(new Runnable() {
             @Override public void run() {
@@ -714,16 +727,19 @@ public class MainActivity extends Activity {
     private void log(String message) {
         Log.i("MainActivity", message);
         String line = message == null ? "" : message;
-        CharSequence cur = logText.getText();
-        String all = (cur == null ? "" : cur.toString()) + "\n" + line;
-        String[] lines = all.split("\n");
-        int from = Math.max(0, lines.length - 12);
-        StringBuilder sb = new StringBuilder();
-        for (int i = from; i < lines.length; i++) {
-            if (sb.length() > 0) sb.append('\n');
-            sb.append(lines[i]);
+        if (logBuffer.length() > 0) logBuffer.append('\n');
+        logBuffer.append(line);
+        if (logBuffer.length() > LOG_MAX_CHARS) {
+            // режем по границе строки, чтобы не рвать половину сообщения
+            int cut = logBuffer.indexOf("\n", logBuffer.length() - LOG_MAX_CHARS);
+            if (cut > 0) logBuffer.delete(0, cut + 1);
         }
-        logText.setText(sb.toString());
+        logText.setText(logBuffer.toString());
+        if (logScroll != null) {
+            logScroll.post(new Runnable() {
+                @Override public void run() { logScroll.fullScroll(View.FOCUS_DOWN); }
+            });
+        }
     }
 
     private void toast(String text) {
