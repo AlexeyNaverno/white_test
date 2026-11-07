@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
@@ -40,14 +41,18 @@ import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
 /**
  * Встроенный браузер (экспериментальная функция): одна вкладка, поиск по умолчанию —
- * DuckDuckGo. Всё управление — сверху: адресная строка, кнопка перехода и меню «⋮»,
- * в котором лежат «через Tor», «Скачать страницу», «Мосты» и «Выйти». Снизу остаётся
- * только строка состояния, поэтому ни страница, ни кнопки не залезают под камеру и
+ * DuckDuckGo. Ходит <b>только</b> через Tor с мостами: обычного канала и VPN у него нет,
+ * и это не переключатель, а правило. Если мостов нет или Tor не поднялся — страницы не
+ * открываются вовсе, с объяснением причины, чтобы не было иллюзии приватности.
+ *
+ * Управление всё сверху: адресная строка, кнопка перехода и меню «⋮» (скачать страницу,
+ * мосты, выйти). Снизу только строка состояния — страница не залезает под камеру и
  * системную навигацию.
  *
  * Страница сохраняется как MHTML — один файл, внутри и разметка, и картинки: это делает
@@ -59,20 +64,25 @@ public class BrowserActivity extends Activity {
     private static final int TEXT = 0xFFE8EEF5;
     private static final int TEXT_DIM = 0xFF8CA3B8;
     private static final int ACCENT = 0xFF3DDC84;
-    private static final String HOME = "https://duckduckgo.com/";
-    private static final String SEARCH = "https://duckduckgo.com/?q=";
+    /** Поиск без JavaScript: быстрее через Tor и не зависит от редиректов на клиенте. */
+    private static final String HOME = "https://html.duckduckgo.com/html/";
+    private static final String SEARCH = "https://html.duckduckgo.com/html/?q=";
 
-    private static final int MENU_TOR = 1;
-    private static final int MENU_SAVE = 2;
-    private static final int MENU_BRIDGES = 3;
-    private static final int MENU_EXIT = 4;
+    private static final int MENU_SAVE = 1;
+    private static final int MENU_BRIDGES = 2;
+    private static final int MENU_EXIT = 3;
+    /** Сколько переадресаций проходим сами (WebView не отдаёт нам 3xx-ответы). */
+    private static final int MAX_REDIRECTS = 5;
+    private static final String START_URL = "about:start";
 
     private WebView web;
     private EditText urlBar;
     private TextView status;
 
-    private boolean torOn;
+    /** true — Tor с мостами поднят и через него можно ходить. */
+    private volatile boolean torReady;
     private volatile boolean torBusy;
+    private volatile String blockReason = "Tor ещё не поднят";
 
     private int dp(int v) {
         return (int) (v * getResources().getDisplayMetrics().density);
@@ -97,7 +107,7 @@ public class BrowserActivity extends Activity {
         urlBar.setSingleLine(true);
         urlBar.setTextColor(TEXT);
         urlBar.setHintTextColor(TEXT_DIM);
-        urlBar.setHint("адрес или поиск (DuckDuckGo)");
+        urlBar.setHint("адрес или поиск (DuckDuckGo, только Tor)");
         urlBar.setTextSize(13);
         urlBar.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
         urlBar.setImeOptions(EditorInfo.IME_ACTION_GO);
@@ -137,31 +147,34 @@ public class BrowserActivity extends Activity {
         // --- сама страница
         web = new WebView(this);
         WebSettings ws = web.getSettings();
-        ws.setJavaScriptEnabled(true);
+        ws.setJavaScriptEnabled(true);          // только внутри Tor; запросы всё равно перехватываем
         ws.setDomStorageEnabled(true);
         ws.setLoadWithOverviewMode(true);
         ws.setUseWideViewPort(true);
         ws.setBuiltInZoomControls(false);
         ws.setSupportMultipleWindows(false);
-        ws.setUserAgentString(ws.getUserAgentString() + " WhitelistBypass/0.0.8");
+        ws.setUserAgentString(ws.getUserAgentString() + " WhitelistBypass/0.0.9");
         web.setWebViewClient(new WebViewClient() {
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
-                if (url != null) urlBar.setText(url);
-                if (!torOn) status.setText("Загрузка…");
+                if (url != null && !url.startsWith("about:")) urlBar.setText(url);
+                if (!torReady) status.setText("Tor не поднят — страницы не открываются");
             }
 
             @Override public void onPageFinished(WebView view, String url) {
-                if (url != null) urlBar.setText(url);
-                status.setText(torOn ? "Готово · через Tor" : "Готово");
+                if (url != null && !url.startsWith("about:")) urlBar.setText(url);
+                if (torReady) status.setText("Готово · через Tor с мостами");
             }
 
             @Override public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                return false;   // одна вкладка: всё открываем здесь же
+                // Одна вкладка и только http(s): чужие схемы (intent://, market://) не пускаем,
+                // чтобы не выйти из Tor наружу.
+                return url == null || !(url.startsWith("http://") || url.startsWith("https://"));
             }
 
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                if (!torOn) return null;                       // обычный режим — как есть
-                return fetchThroughTor(request);               // экспериментальный режим
+                String url = request.getUrl() == null ? "" : request.getUrl().toString();
+                if (url.startsWith("about:")) return null;
+                return fetchThroughTor(request);
             }
         });
         root.addView(web, new LinearLayout.LayoutParams(
@@ -179,25 +192,121 @@ public class BrowserActivity extends Activity {
         setContentView(root);
         Ui.applyInsets(root);
 
-        torOn = Prefs.browserTor(this);
-        updateStatus();
-        if (torOn) enableTor();
-        web.loadUrl(HOME);
+        if (BypassVpnService.isRunning()) {
+            // «Никогда через VPN»: пока туннель поднят, весь трафик приложения идёт в него.
+            askToStopTunnel();
+        } else {
+            startTor();
+        }
+    }
+
+    /**
+     * Туннель заворачивает весь трафик приложения, включая Tor, поэтому честный выбор один:
+     * остановить туннель или не открывать браузер.
+     */
+    private void askToStopTunnel() {
+        status.setText("Туннель включён — сначала его нужно остановить");
+        web.loadDataWithBaseURL(null, infoPage("Туннель включён",
+                "Браузер ходит только через Tor с мостами и никогда через VPN.<br>"
+                        + "Остановите туннель, чтобы страницы шли через Tor."),
+                "text/html", "utf-8", null);
+        new AlertDialog.Builder(this)
+                .setTitle("Остановить туннель?")
+                .setMessage("Пока VPN включён, браузер ходил бы через него. Остановить туннель "
+                        + "и открыть страницы через Tor?")
+                .setPositiveButton("Остановить туннель", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface dialog, int which) {
+                        stopTunnelThenTor();
+                    }
+                })
+                .setNegativeButton("Закрыть браузер", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface dialog, int which) {
+                        finish();
+                    }
+                })
+                .setCancelable(false)
+                .show();
+    }
+
+    private void stopTunnelThenTor() {
+        status.setText("Останавливаю туннель…");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    startService(new Intent(BrowserActivity.this, BypassVpnService.class)
+                            .setAction(BypassVpnService.ACTION_STOP));
+                } catch (Exception ignored) {
+                }
+                long deadline = System.currentTimeMillis() + 10_000;
+                while (System.currentTimeMillis() < deadline && BypassVpnService.isRunning()) {
+                    try {
+                        Thread.sleep(300);
+                    } catch (InterruptedException e) {
+                        break;
+                    }
+                }
+                runOnUiThread(new Runnable() {
+                    @Override public void run() { startTor(); }
+                });
+            }
+        }, "browser-stop-vpn").start();
+    }
+
+    // ------------------------------------------------------------------ Tor (всегда и только с мостами)
+
+    private void startTor() {
+        if (torBusy || torReady) return;
+        if (TorEngine.candidateBridges(this).isEmpty()) {
+            blockReason = "нет мостов: добавьте их в настройках Tor";
+            status.setText("Мостов нет — браузер не открывает страницы");
+            web.loadDataWithBaseURL(null, infoPage("Нет мостов Tor",
+                    "Браузер работает только через Tor с мостами, а мостов нет.<br>"
+                            + "Настройки → Tor: впишите мосты или нажмите «Проверить мосты "
+                            + "и источники через Tor» — приложение выберет самые быстрые."),
+                    "text/html", "utf-8", null);
+            return;
+        }
+        torBusy = true;
+        torReady = false;
+        status.setText("Поднимаю Tor с мостами…");
+        web.loadDataWithBaseURL(null, infoPage("Поднимаю Tor",
+                "Страницы откроются, когда Tor поднимется с мостом. Это занимает до минуты."),
+                "text/html", "utf-8", null);
+        new Thread(new Runnable() {
+            @Override public void run() {
+                final boolean ok = TorEngine.restart(BrowserActivity.this, 120_000);
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        torBusy = false;
+                        if (!ok) {
+                            blockReason = "Tor не поднялся: " + TorEngine.lastError();
+                            status.setText(blockReason);
+                            web.loadDataWithBaseURL(null, infoPage("Tor не поднялся",
+                                    "Причина: " + TorEngine.lastError()
+                                            + "<br>Браузер не открывает страницы напрямую — "
+                                            + "проверьте мосты в настройках."),
+                                    "text/html", "utf-8", null);
+                            return;
+                        }
+                        torReady = true;
+                        status.setText("Tor с мостом работает — страницы только через него");
+                        status.setTextColor(ACCENT);
+                        web.loadUrl(HOME);
+                    }
+                });
+            }
+        }, "browser-tor").start();
     }
 
     /** Меню «⋮»: сюда убраны все кнопки, чтобы страница занимала весь экран. */
     private void showMenu(View anchor) {
         PopupMenu menu = new PopupMenu(this, anchor);
-        menu.getMenu().add(Menu.NONE, MENU_TOR, 1, torOn ? "Tor: включён (через мосты)" : "Tor: выключен");
-        menu.getMenu().add(Menu.NONE, MENU_SAVE, 2, "Скачать страницу");
-        menu.getMenu().add(Menu.NONE, MENU_BRIDGES, 3, "Мосты (настройки Tor)");
-        menu.getMenu().add(Menu.NONE, MENU_EXIT, 4, "Выйти в настройки");
+        menu.getMenu().add(Menu.NONE, MENU_SAVE, 1, "Скачать страницу");
+        menu.getMenu().add(Menu.NONE, MENU_BRIDGES, 2, "Мосты (настройки Tor)");
+        menu.getMenu().add(Menu.NONE, MENU_EXIT, 3, "Выйти в настройки");
         menu.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
             @Override public boolean onMenuItemClick(MenuItem item) {
                 switch (item.getItemId()) {
-                    case MENU_TOR:
-                        toggleTor();
-                        return true;
                     case MENU_SAVE:
                         saveCurrentPage();
                         return true;
@@ -219,8 +328,13 @@ public class BrowserActivity extends Activity {
     private void go(String input) {
         String q = input == null ? "" : input.trim();
         if (q.isEmpty()) return;
+        if (!torReady) {
+            toast("Страницы только через Tor: " + blockReason);
+            status.setText("Только через Tor: " + blockReason);
+            return;
+        }
         String url;
-        if (q.startsWith("http://") || q.startsWith("https://") || q.startsWith("file://")) {
+        if (q.startsWith("http://") || q.startsWith("https://")) {
             url = q;
         } else if (q.contains(".") && !q.contains(" ")) {
             url = "https://" + q;
@@ -230,72 +344,38 @@ public class BrowserActivity extends Activity {
         web.loadUrl(url);
     }
 
-    // ------------------------------------------------------------------ Tor
-
-    private void toggleTor() {
-        if (torBusy) return;
-        if (!torOn && TorEngine.candidateBridges(this).isEmpty()) {
-            status.setText("Мостов нет — добавьте их в настройках Tor");
-            toast("Без мостов Tor не включается: добавьте мосты в настройках");
-            return;
-        }
-        torOn = !torOn;
-        Prefs.get(this).edit().putBoolean(Prefs.BROWSER_TOR, torOn).apply();
-        updateStatus();
-        if (torOn) enableTor();
-        else disableTor();
-    }
-
-    private void updateStatus() {
-        if (status == null) return;
-        status.setText(torOn ? "Tor включён — страницы идут через мосты" : "Tor выключен — страницы напрямую");
-        status.setTextColor(torOn ? ACCENT : TEXT_DIM);
-    }
-
-    private void enableTor() {
-        if (torBusy) return;
-        torBusy = true;
-        status.setText("Поднимаю Tor с мостами… (Настройки → Tor)");
-        new Thread(new Runnable() {
-            @Override public void run() {
-                final boolean ok = TorEngine.restart(BrowserActivity.this, 120_000);
-                runOnUiThread(new Runnable() {
-                    @Override public void run() {
-                        torBusy = false;
-                        if (!ok) {
-                            status.setText("Tor не поднялся — страницы пойдут напрямую");
-                            torOn = false;
-                            Prefs.get(BrowserActivity.this).edit()
-                                    .putBoolean(Prefs.BROWSER_TOR, false).apply();
-                            updateStatus();
-                            return;
-                        }
-                        status.setText("Tor работает — страницы идут через мост");
-                        status.setTextColor(ACCENT);
-                        web.reload();
-                    }
-                });
-            }
-        }, "browser-tor").start();
-    }
-
-    private void disableTor() {
-        TorEngine.stop(this);
-        updateStatus();
-        web.reload();
-    }
+    // ------------------------------------------------------------------ запросы через Tor
 
     /**
      * Запрос страницы через Tor.
      *
-     * Своего прокси у WebView нет (ProxyController — системный API), поэтому каждый GET
-     * забираем сами через SOCKS-порт Tor и отдаём WebView готовым ответом. Внутри Tor
-     * оказываются и разметка, и картинки, и стили — то есть «через Tor» без вранья.
-     * POST не повторяем: тело запроса WebView не отдаёт, такие запросы идут напрямую.
+     * Своего прокси у WebView нет (ProxyController — системный API), поэтому каждый запрос
+     * забираем сами через SOCKS-порт Tor и отдаём WebView готовым ответом: внутри Tor
+     * оказываются и разметка, и картинки, и стили. Если Tor не готов или запрос не GET —
+     * страница с объяснением, но никогда не прямой запрос: иначе был бы обычный интернет.
+     *
+     * Переадресации проходим сами: WebResourceResponse не принимает коды 300–399
+     * («statusCode can't be in the 300,399 range»), а поиск без редиректов не работает.
      */
     private WebResourceResponse fetchThroughTor(WebResourceRequest request) {
         String url = request.getUrl() == null ? null : request.getUrl().toString();
-        if (url == null || !"GET".equalsIgnoreCase(request.getMethod())) return null;
+        if (url == null) return blocked("Пустой адрес");
+        if (!torReady) return blocked("Tor не поднят: " + blockReason);
+        String method = request.getMethod();
+        if (!"GET".equalsIgnoreCase(method)) {
+            // Тело POST WebView не отдаёт, а отправлять его напрямую нельзя — значит, нельзя и никак.
+            return blocked("Запрос " + method + " через Tor не повторяется: браузер работает "
+                    + "только с GET, чтобы не выйти в обычный интернет.");
+        }
+        try {
+            return fetch(url, MAX_REDIRECTS);
+        } catch (Exception e) {
+            return blocked("Tor: " + e.getMessage());
+        }
+    }
+
+    /** Один запрос через SOCKS Tor; 3xx разворачиваем сами. */
+    private WebResourceResponse fetch(String url, int hops) throws Exception {
         HttpURLConnection conn = null;
         try {
             Proxy socks = new Proxy(Proxy.Type.SOCKS,
@@ -305,14 +385,27 @@ public class BrowserActivity extends Activity {
             conn.setReadTimeout(30000);
             conn.setInstanceFollowRedirects(false);
             conn.setRequestProperty("User-Agent",
-                    "Mozilla/5.0 (Linux; Android) WhitelistBypass/0.0.8");
-            conn.setRequestProperty("Accept", "*/*");
+                    "Mozilla/5.0 (Linux; Android) WhitelistBypass/0.0.9");
+            conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,*/*");
+            conn.setRequestProperty("Accept-Language", "ru-RU,ru;q=0.9,en;q=0.8");
             int code = conn.getResponseCode();
+
+            if (code >= 300 && code < 400) {
+                String location = conn.getHeaderField("Location");
+                if (location == null || location.isEmpty()) {
+                    return blocked("Tor: переадресация без адреса (HTTP " + code + ")");
+                }
+                if (hops <= 0) return blocked("Tor: больше " + MAX_REDIRECTS + " переадресаций подряд");
+                String next = new URL(new URL(url), location).toString();
+                if (!next.startsWith("http://") && !next.startsWith("https://")) {
+                    return blocked("Tor: переадресация на неподдерживаемый адрес");
+                }
+                return fetch(next, hops - 1);
+            }
+
             Map<String, String> headers = new HashMap<>();
             String type = conn.getContentType();
             if (type != null) headers.put("Content-Type", type);
-            String location = conn.getHeaderField("Location");
-            if (location != null) headers.put("Location", location);
             String mime = "text/html";
             String charset = "utf-8";
             if (type != null) {
@@ -337,13 +430,29 @@ public class BrowserActivity extends Activity {
             String reason = code >= 400 ? "Error" : "OK";
             return new WebResourceResponse(mime, charset, code, reason, headers,
                     new ByteArrayInputStream(buf.toByteArray()));
-        } catch (Exception e) {
-            return new WebResourceResponse("text/plain", "utf-8", 502, "Bad Gateway",
-                    new HashMap<String, String>(),
-                    new ByteArrayInputStream(("Tor: " + e.getMessage()).getBytes()));
         } finally {
             if (conn != null) conn.disconnect();
         }
+    }
+
+    /** Ответ-заглушка: объяснение вместо страницы. Никогда не уходит в обычный интернет. */
+    private WebResourceResponse blocked(String reason) {
+        return new WebResourceResponse("text/html", "utf-8", 200, "OK",
+                new HashMap<String, String>(),
+                new ByteArrayInputStream(infoPage("Страница не открыта", reason)
+                        .getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private String infoPage(String title, String text) {
+        return "<!doctype html><html><head><meta charset=\"utf-8\">"
+                + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head>"
+                + "<body style=\"margin:0;padding:24px;background:#0E141B;color:#E8EEF5;"
+                + "font-family:sans-serif;font-size:15px;line-height:1.45\">"
+                + "<div style=\"font-size:18px;margin-bottom:10px;color:#3DDC84\">" + title + "</div>"
+                + "<div style=\"color:#8CA3B8\">" + text + "</div>"
+                + "<div style=\"margin-top:18px;color:#5C7086;font-size:12px\">"
+                + "Браузер работает только через Tor с мостами.</div>"
+                + "</body></html>";
     }
 
     // ------------------------------------------------------------------ сохранение страницы
@@ -445,12 +554,10 @@ public class BrowserActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        if (torOn) {
-            // вышли из браузера — Tor больше не нужен, не держим батарею
-            try {
-                TorEngine.stop(this);
-            } catch (Throwable ignored) {
-            }
+        // браузер живёт только вместе с Tor: ушли — Tor гасим, чтобы не держать батарею
+        try {
+            TorEngine.stop(this);
+        } catch (Throwable ignored) {
         }
         if (web != null) {
             try {
