@@ -8,16 +8,20 @@ import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 /**
  * Настройки. Только то, что реально влияет на работу: источники, порог скорости,
@@ -35,6 +39,10 @@ public class SettingsActivity extends Activity {
     /** Текст пула для экспорта: пишем в файл после того, как пользователь выбрал место. */
     private String pendingExport;
     private TextView importLog;
+    /** Наборы настроек: готовые + сохранённые из .json. */
+    private List<Presets.Preset> presets;
+    private Spinner presetSpinner;
+    private TextView presetNote;
 
     private static final int TEXT = 0xFFE8EEF5;
     private static final int TEXT_DIM = 0xFF8CA3B8;
@@ -69,10 +77,12 @@ public class SettingsActivity extends Activity {
         // --- скорость ---
         section("Скорость");
         editMinSpeed = numberField(String.valueOf(Prefs.minSpeedKbit(this)));
-        label("Порог «рабочего» конфига, кбит/с (128 по умолчанию = 16 КБ/с)");
+        label("Порог «рабочего» конфига, кбит/с (32 по умолчанию = 4 КБ/с)");
         root.addView(editMinSpeed);
-        note("Единицы: 1 КБ/с = 8 кбит/с. По умолчанию 128 кбит/с — это 16 КБ/с: конфиг "
-                + "засчитывается, если качает быстрее 16 КБ/с. Хотите строже — 512 или 1024.");
+        note("Единицы: 1 КБ/с = 8 кбит/с. По умолчанию 32 кбит/с — это 4 КБ/с: конфиг "
+                + "засчитывается, если качает быстрее 4 КБ/с. Порог низкий намеренно: живой, "
+                + "но медленный конфиг лучше, чем пустой пул. На быстром Wi-Fi можно поднять "
+                + "до 512 или 1024.");
 
         editLanes = numberField(String.valueOf(Prefs.speedLanes(this)));
         label("Сколько ядер мерить скорость одновременно (1–4, по умолчанию 4)");
@@ -83,7 +93,7 @@ public class SettingsActivity extends Activity {
         root.addView(editSpeedUrls);
 
         editGateTimeout = numberField(String.valueOf(Prefs.gateTimeoutMs(this)));
-        label("Сколько ждём на один замер, мс (1500 по умолчанию)");
+        label("Сколько ждём на один замер, мс (3000 по умолчанию)");
         root.addView(editGateTimeout);
 
         note("Замер идёт на маленьких файлах (32 и 128 КБ) и в несколько дорожек параллельно: "
@@ -100,7 +110,7 @@ public class SettingsActivity extends Activity {
         label("Потоков пинга одновременно");
         root.addView(editThreads);
         editTimeout = numberField(String.valueOf(Prefs.pingTimeoutMs(this)));
-        label("Таймаут пинга, мс (1000 по умолчанию)");
+        label("Таймаут пинга, мс (2000 по умолчанию)");
         root.addView(editTimeout);
 
         editPingTargets = multiField(Prefs.join(Prefs.pingTargets(this)), 5);
@@ -133,7 +143,7 @@ public class SettingsActivity extends Activity {
 
         // --- DPI на линии ---
         section("DPI-обход");
-        swDesync = switchRow("DPI-обход линии до VPN-сервера (ciadpi) — по умолчанию выключен",
+        swDesync = switchRow("DPI-обход линии до VPN-сервера (ciadpi) — по умолчанию включён",
                 Prefs.desyncLine(this));
         editStrategy = singleField(Prefs.dpiStrategy(this));
         label("Стратегия ciadpi (аргументы командной строки)");
@@ -407,6 +417,76 @@ public class SettingsActivity extends Activity {
         });
         root.addView(importSettings);
 
+        // --- наборы настроек: выбираются из списка, импортированные добавляются сюда же ---
+        section("Наборы настроек");
+        note("Готовые наборы: «Стандарт» (с DPI-обходом — он же по умолчанию), «Wi-Fi» "
+                + "(без DPI, самый быстрый замер) и «Белые списки» (низкий порог, только "
+                + "white-источники). Всё, что вы импортируете из .json, остаётся в этом же "
+                + "списке отдельным набором — можно вернуться одной кнопкой.");
+
+        presets = Presets.all(this);
+        ArrayAdapter<String> presetAdapter =
+                new ArrayAdapter<>(this, android.R.layout.simple_spinner_item);
+        for (Presets.Preset p : presets) presetAdapter.add(p.title);
+        presetAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+
+        presetSpinner = new Spinner(this);
+        presetSpinner.setAdapter(presetAdapter);
+        root.addView(presetSpinner);
+
+        presetNote = new TextView(this);
+        presetNote.setTextColor(TEXT_DIM);
+        presetNote.setTextSize(12);
+        presetNote.setPadding(0, dp(6), 0, dp(6));
+        root.addView(presetNote);
+        presetSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int pos, long id) {
+                showPresetNote(pos);
+            }
+
+            @Override public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
+        showPresetNote(0);
+
+        Button applyPreset = smallButton("Применить выбранный набор");
+        applyPreset.setTextColor(0xFF3DDC84);
+        applyPreset.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                int pos = presetSpinner.getSelectedItemPosition();
+                if (pos < 0 || pos >= presets.size()) {
+                    toast("Набор не выбран");
+                    return;
+                }
+                final Presets.Preset p = presets.get(pos);
+                String msg = Presets.apply(SettingsActivity.this, p);
+                skipSaveOnPause = true;   // экран не должен затереть только что применённое
+                toast(msg);
+                recreate();
+            }
+        });
+        root.addView(applyPreset);
+
+        Button deletePreset = smallButton("Удалить выбранный набор (только свой из .json)");
+        deletePreset.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                int pos = presetSpinner.getSelectedItemPosition();
+                if (pos < 0 || pos >= presets.size()) {
+                    toast("Набор не выбран");
+                    return;
+                }
+                Presets.Preset p = presets.get(pos);
+                if (!Presets.delete(SettingsActivity.this, p)) {
+                    toast("Готовый набор удалить нельзя — можно только применить");
+                    return;
+                }
+                toast("Набор удалён: " + p.title);
+                skipSaveOnPause = true;
+                recreate();
+            }
+        });
+        root.addView(deletePreset);
+
         Button saveConsole = smallButton("Сохранить консоль в .json");
         saveConsole.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
@@ -472,7 +552,7 @@ public class SettingsActivity extends Activity {
         root.addView(browser);
 
         TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.1.3\n"
+        footer.setText("Обход Белых Списков 0.1.4\n"
                 + versionLine() + "\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");
         footer.setTextColor(TEXT_DIM);
@@ -543,6 +623,17 @@ public class SettingsActivity extends Activity {
         }
     }
 
+    /** Описание выбранного набора под списком. */
+    private void showPresetNote(int pos) {
+        if (presetNote == null) return;
+        if (pos < 0 || pos >= presets.size()) {
+            presetNote.setText("");
+            return;
+        }
+        Presets.Preset p = presets.get(pos);
+        presetNote.setText((p.builtin ? "" : "СВОЙ НАБОР · ") + p.note);
+    }
+
     private boolean writeTo(Uri uri, String text) {
         try (java.io.OutputStream out = getContentResolver().openOutputStream(uri)) {
             if (out == null) return false;
@@ -607,10 +698,13 @@ public class SettingsActivity extends Activity {
         android.content.SharedPreferences.Editor e = Prefs.get(this).edit();
         e.putString(Prefs.SOURCES, normalizeLines(editSources.getText().toString()));
         e.putString(Prefs.SPEED_URLS, normalizeLines(editSpeedUrls.getText().toString()));
-        e.putInt(Prefs.MIN_SPEED_KBIT, Prefs.clamp(parseInt(editMinSpeed, 128), 8, 160000));
-        e.putInt(Prefs.GATE_TIMEOUT_MS, Prefs.clamp(parseInt(editGateTimeout, 1500), 800, 20000));
+        e.putInt(Prefs.MIN_SPEED_KBIT,
+                Prefs.clamp(parseInt(editMinSpeed, Prefs.DEFAULT_MIN_SPEED_KBIT), 8, 160000));
+        e.putInt(Prefs.GATE_TIMEOUT_MS,
+                Prefs.clamp(parseInt(editGateTimeout, Prefs.DEFAULT_GATE_TIMEOUT_MS), 800, 20000));
         e.putInt(Prefs.PING_THREADS, Prefs.clamp(parseInt(editThreads, 60), 1, 200));
-        e.putInt(Prefs.PING_TIMEOUT_MS, Prefs.clamp(parseInt(editTimeout, 1000), 300, 15000));
+        e.putInt(Prefs.PING_TIMEOUT_MS,
+                Prefs.clamp(parseInt(editTimeout, Prefs.DEFAULT_PING_TIMEOUT_MS), 300, 15000));
         e.putInt(Prefs.SPEED_LANES, Prefs.clamp(parseInt(editLanes, 3), 1, 4));
         e.putString(Prefs.PING_TARGETS, normalizeLines(editPingTargets.getText().toString()));
         e.putString(Prefs.HEALTH_URLS, normalizeLines(editHealthUrls.getText().toString()));
@@ -619,7 +713,8 @@ public class SettingsActivity extends Activity {
         e.putBoolean(Prefs.DPI_AUTOTUNE, swDpiAutotune.isChecked());
         e.putString(Prefs.VPN_DNS, editVpnDns.getText().toString().trim());
         e.putInt(Prefs.MONITOR_INTERVAL_SEC, Prefs.clamp(parseInt(editMonitor, 15), 5, 300));
-        e.putInt(Prefs.SWITCH_TIMEOUT_SEC, Prefs.clamp(parseInt(editSwitchTimeout, 45), 5, 3600));
+        e.putInt(Prefs.SWITCH_TIMEOUT_SEC,
+                Prefs.clamp(parseInt(editSwitchTimeout, Prefs.DEFAULT_SWITCH_TIMEOUT_SEC), 5, 3600));
         e.putString(Prefs.TOR_BRIDGES, normalizeLines(editTorBridges.getText().toString()));
         e.putString(Prefs.TOR_EXTRA_TORRC, editTorExtra.getText().toString().trim());
         e.putBoolean(Prefs.DESYNC_LINE, swDesync.isChecked());

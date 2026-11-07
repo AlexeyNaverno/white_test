@@ -64,8 +64,28 @@ public final class Prefs {
     public static final String CURRENT_PORT = "current_port";
     public static final String POOL_AT = "pool_at";
 
-    /** Одна рабочая стратегия DPI — та, что подставляется в линию до VPN-сервера. */
-    public static final String DEFAULT_STRATEGY = "--disorder 1 --auto=torst --tlsrec 1+s";
+    // --- значения набора «Стандарт» (они же значения по умолчанию) ---
+    /** Порог «рабочего» конфига: 32 кбит/с = 4 КБ/с. Белые списки и так медленные. */
+    public static final int DEFAULT_MIN_SPEED_KBIT = 32;
+    /** Окно замера на один URL, мс. */
+    public static final int DEFAULT_GATE_TIMEOUT_MS = 3000;
+    /** Таймаут TCP-пинга, мс. */
+    public static final int DEFAULT_PING_TIMEOUT_MS = 2000;
+    /** Через сколько секунд без ответа монитор меняет конфиг. */
+    public static final int DEFAULT_SWITCH_TIMEOUT_SEC = 15;
+    /** DPI-обход линии включён по умолчанию. */
+    public static final boolean DEFAULT_DESYNC_LINE = true;
+    public static final boolean DEFAULT_DPI_AUTOTUNE = true;
+
+    /**
+     * Одна рабочая стратегия DPI — та, что подставляется в линию до VPN-сервера.
+     * Набор «Стандарт»: комплексная фрагментация (несколько повторов split) — она
+     * переживает большую часть провайдерских DPI, тогда как одиночный disorder часто
+     * не проходит. Проверено на живых блокировках: с ней подключение перестаёт зависеть
+     * от того, «повезло ли» с первых байтов.
+     */
+    public static final String DEFAULT_STRATEGY =
+            "-o1 -s1+s -s3+s -s6+s -s9+s -s12+s -s15+s -s20+s -s30+s -a1 -An";
 
     /**
      * Списки проверенных аргументов ciadpi (ByeDPI). Берём из открытых репозиториев,
@@ -123,32 +143,32 @@ public final class Prefs {
     };
 
     /**
-     * Пять мест для проверки КАНАЛА через туннель (HTTP через локальный SOCKS).
-     * Достаточно ответа любого — один сайт может быть недоступен по своим причинам.
+     * Места для проверки КАНАЛА через туннель (HTTP через локальный SOCKS).
+     * Лёгкие generate_204: ответ в десятки байт, проверка занимает доли секунды, и
+     * каждый адрес живёт на своей инфраструктуре — одного ответа достаточно.
      */
     public static final String[] DEFAULT_HEALTH_URLS = {
-            "https://discord.com/",
-            "https://www.instagram.com/",
-            "https://x.com/",
-            "https://www.youtube.com/",
-            "https://speed.cloudflare.com/__down?bytes=65536"
+            "http://cp.cloudflare.com/generate_204",
+            "https://www.google.com/generate_204",
+            "https://connectivitycheck.gstatic.com/generate_204"
     };
 
     /** Несколько резервных DNS: первый — основной, остальные — на случай перехвата. */
     public static final String DEFAULT_DNS = "1.1.1.1, 8.8.8.8, 9.9.9.9";
 
-    /** Файлы по 1 МБ с иностранных CDN — по ним измеряется скорость канала. */
     /**
-     * Чем меряем скорость: сначала настоящий файл со списком конфигов с GitHub — так замер
-     * заодно доказывает, что через этот конфиг реально достаётся зарубежный источник
-     * (именно за ним люди и идут). Если GitHub не отдался — небольшие файлы Cloudflare и
-     * CacheFly, чтобы замер не зависел от одного сервиса.
+     * Чем меряем скорость.
+     *
+     * Сначала лёгкие generate_204: они отвечают мгновенно и почти отовсюду, поэтому
+     * проверка «канал вообще живой» не ждёт мегабайтов. Затем настоящие файлы со списками
+     * конфигов с GitHub — на них и считается КБ/с, потому что именно за доступом к
+     * зарубежным источникам люди и включают обход.
      */
     public static final String[] DEFAULT_SPEED_URLS = {
+            "http://cp.cloudflare.com/generate_204",
+            "https://www.google.com/generate_204",
             "https://raw.githubusercontent.com/luxxuria/harvester/main/speed_tested.txt",
-            "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/vless.txt",
-            "https://speed.cloudflare.com/__down?bytes=131072",
-            "http://cachefly.cachefly.net/100kb.test"
+            "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/vless.txt"
     };
 
     public static SharedPreferences get(Context ctx) {
@@ -163,9 +183,9 @@ public final class Prefs {
         return Math.max(1, Math.round(kbit / 8f));
     }
 
-    /** Порог в кбит/с — как он задаётся в настройках. 128 кбит/с = 16 КБ/с. */
+    /** Порог в кбит/с — как он задаётся в настройках. 32 кбит/с = 4 КБ/с. */
     public static int minSpeedKbit(Context c) {
-        return clamp(get(c).getInt(MIN_SPEED_KBIT, 128), 8, 160000);
+        return clamp(get(c).getInt(MIN_SPEED_KBIT, DEFAULT_MIN_SPEED_KBIT), 8, 160000);
     }
 
     /** «128 кбит/с (16 КБ/с)» — порог в тех единицах, в которых он задан. */
@@ -184,11 +204,11 @@ public final class Prefs {
     }
 
     /**
-     * Сколько ждём на один замер, мс. По умолчанию 1500: рабочий конфиг отдаёт первые
-     * килобайты почти сразу, а ожидание «вдруг разгонится» только растягивает сбор пула.
+     * Сколько ждём на один замер, мс. По умолчанию 3000: окно замера считается от первого
+     * байта, поэтому три секунды — это уже полноценное измерение, а не «успел/не успел».
      */
     public static int gateTimeoutMs(Context c) {
-        return clamp(get(c).getInt(GATE_TIMEOUT_MS, 1500), 800, 20000);
+        return clamp(get(c).getInt(GATE_TIMEOUT_MS, DEFAULT_GATE_TIMEOUT_MS), 800, 20000);
     }
 
     // --- источники ---
@@ -205,9 +225,12 @@ public final class Prefs {
         return clamp(get(c).getInt(PING_THREADS, 60), 1, 200);
     }
 
-    /** Таймаут пинга, мс. 1000 по умолчанию: нас интересуют только «более-менее рабочие». */
+    /**
+     * Таймаут пинга, мс. 2000 по умолчанию: живой, но задумчивый сервер успевает ответить,
+     * а мёртвый всё равно отваливается — 2 с не растягивают пинг на минуты.
+     */
     public static int pingTimeoutMs(Context c) {
-        return clamp(get(c).getInt(PING_TIMEOUT_MS, 1000), 300, 15000);
+        return clamp(get(c).getInt(PING_TIMEOUT_MS, DEFAULT_PING_TIMEOUT_MS), 300, 15000);
     }
 
     /** Цели TCP-пинга (host:port). Пусто/битые строки отбрасываются. */
@@ -248,9 +271,13 @@ public final class Prefs {
     // --- DPI на линии ---
 
     /** Пробовать DPI-обход линии (ciadpi) для конфигов, не вышедших напрямую. */
-    /** DPI-обход линии по умолчанию выключен: включается галочкой в настройках. */
+    /**
+     * DPI-обход линии. В наборе «Стандарт» включён: без него на живых блокировках
+     * подключение получается «через раз», и это ровно та сложность, на которую жалуются.
+     * Набор «Wi-Fi» выключает его — там канал и так прямой.
+     */
     public static boolean desyncLine(Context c) {
-        return get(c).getBoolean(DESYNC_LINE, false);
+        return get(c).getBoolean(DESYNC_LINE, DEFAULT_DESYNC_LINE);
     }
 
     public static String dpiStrategy(Context c) {
@@ -268,7 +295,7 @@ public final class Prefs {
 
     /** Автоподбор стратегий тоже только вместе с DPI-обходом: без него он не запускается. */
     public static boolean dpiAutotune(Context c) {
-        return get(c).getBoolean(DPI_AUTOTUNE, false);
+        return get(c).getBoolean(DPI_AUTOTUNE, DEFAULT_DPI_AUTOTUNE);
     }
 
     /** Адреса, по которым проверяется, пробивает ли стратегия DPI блокировку. */
@@ -316,7 +343,7 @@ public final class Prefs {
     }
 
     public static int switchTimeoutSec(Context c) {
-        return clamp(get(c).getInt(SWITCH_TIMEOUT_SEC, 45), 5, 3600);
+        return clamp(get(c).getInt(SWITCH_TIMEOUT_SEC, DEFAULT_SWITCH_TIMEOUT_SEC), 5, 3600);
     }
 
     public static boolean bootConnect(Context c) {
@@ -409,12 +436,29 @@ public final class Prefs {
      */
     public static void migrate(Context c) {
         SharedPreferences p = get(c);
-        if (p.getBoolean("migrated_timeouts_v2", false)) return;
-        SharedPreferences.Editor e = p.edit();
-        if (p.getInt(GATE_TIMEOUT_MS, 0) == 4000) e.putInt(GATE_TIMEOUT_MS, 1500);
-        if (p.getInt(PING_TIMEOUT_MS, 0) == 2500) e.putInt(PING_TIMEOUT_MS, 1000);
-        e.putBoolean("migrated_timeouts_v2", true);
-        e.apply();
+        if (!p.getBoolean("migrated_timeouts_v2", false)) {
+            SharedPreferences.Editor e = p.edit();
+            if (p.getInt(GATE_TIMEOUT_MS, 0) == 4000) e.putInt(GATE_TIMEOUT_MS, 1500);
+            if (p.getInt(PING_TIMEOUT_MS, 0) == 2500) e.putInt(PING_TIMEOUT_MS, 1000);
+            e.putBoolean("migrated_timeouts_v2", true);
+            e.apply();
+        }
+        migrateToStandardPreset(c);
+    }
+
+    /**
+     * 0.1.4: значения по умолчанию стали набором «Стандарт» (DPI-обход включён, порог 32 кбит/с,
+     * окно замера 3000 мс, лёгкие generate_204). Переносим их тем, у кого настройки так и
+     * остались нетронутыми: иначе человек, ни разу не открывавший настройки, продолжал бы
+     * сидеть на старых значениях и на старом (без DPI) поведении.
+     * У тех, кто что-то менял под себя, ничего не трогаем — наборы можно применить вручную.
+     */
+    private static void migrateToStandardPreset(Context c) {
+        SharedPreferences p = get(c);
+        if (p.getBoolean("migrated_presets_v1", false)) return;
+        boolean untouched = Presets.looksUntouched(p);
+        p.edit().putBoolean("migrated_presets_v1", true).apply();
+        if (untouched) Presets.applyStandard(c);
     }
 
     // --- утилиты ---

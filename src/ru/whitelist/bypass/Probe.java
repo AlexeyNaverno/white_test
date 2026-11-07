@@ -156,6 +156,7 @@ public final class Probe {
         long bestMs = 0;
         int attempts = 0;
         String lastError = "";
+        boolean emptyAnswer = false;
         for (String url : speedPlan(Prefs.speedUrls(ctx), maxUrls)) {
             if (ConfigRepository.isCancelled()) break;
             attempts++;
@@ -168,8 +169,17 @@ public final class Probe {
                 bestBytes = r.bytes;
                 bestMs = r.ms;
             }
+            // 204/пустой ответ доказывает, что канал живой, но мерить в нём нечего —
+            // такой URL не должен считаться «нет данных», идём к следующему.
+            if (r.bytes == 0 && r.code >= 200 && r.code < 400) {
+                emptyAnswer = true;
+                continue;
+            }
             if (best <= 0) lastError = r.reason();
             if (best > 0) break; // первого успешного замера достаточно
+        }
+        if (best <= 0 && emptyAnswer && lastError.isEmpty()) {
+            lastError = "серверы ответили 204 без тела — мерить нечего";
         }
         return new Speed(best, bestUrl, bestBytes, bestMs, attempts, lastError);
     }
@@ -184,19 +194,28 @@ public final class Probe {
      * «быстрый поиск ничего не находит»). Поэтому в план всегда попадает один
      * «дружелюбный» источник с CDN.
      */
+    /**
+     * План замера: какие URL пробовать и в каком порядке.
+     *
+     * Отдельно стоят ответы `generate_204`: они доказывают, что канал живой, но тела в них
+     * нет — мерить нечего. Поэтому они идут в самом конце, только если ничего с телом не
+     * отдалось. В короткой проверке первым берётся небольшой файл с CDN (он отвечает почти
+     * везде), а «настоящий» источник с GitHub измеряет уже реальную скорость.
+     */
     static java.util.List<String> speedPlan(java.util.List<String> urls, int maxUrls) {
         java.util.List<String> plan = new java.util.ArrayList<>();
         if (urls == null || urls.isEmpty() || maxUrls <= 0) return plan;
-        boolean shortProbe = maxUrls <= 3;
-        if (shortProbe) {
-            // Быстрая отбраковка: сначала небольшой файл с CDN — он отвечает почти везде
-            // и не занимает окно замера большой загрузкой.
+        if (maxUrls <= 3) {
             for (String u : urls) {
-                if (isCdnFriendly(u) && !plan.contains(u)) { plan.add(u); break; }
+                if (isCdnFriendly(u) && !isBodyless(u) && !plan.contains(u)) { plan.add(u); break; }
             }
         }
-        // «Настоящий» источник с GitHub: полный замер начинается с него (он же доказывает
-        // доступность зарубежного списка), а в короткой проверке он идёт вторым.
+        // сначала всё, в чём есть тело — по нему можно посчитать скорость
+        for (String u : urls) {
+            if (plan.size() >= maxUrls) break;
+            if (!plan.contains(u) && !isBodyless(u)) plan.add(u);
+        }
+        // generate_204 — в конце: связность подтвердят, скорость — нет
         for (String u : urls) {
             if (plan.size() >= maxUrls) break;
             if (!plan.contains(u)) plan.add(u);
@@ -204,10 +223,20 @@ public final class Probe {
         return plan;
     }
 
-    /** Небольшие файлы Cloudflare/CacheFly доступны там, где GitHub уже закрыт. */
+    /** Ответ без тела: `generate_204` и подобные — для скорости не годятся. */
+    private static boolean isBodyless(String url) {
+        return url != null && url.toLowerCase().contains("generate_204");
+    }
+
+    /**
+     * Небольшие файлы с CDN доступны там, где GitHub уже закрыт — их и пробуем первыми
+     * в короткой проверке. Ответы generate_204 сюда не годятся: у них нет тела, а значит
+     * и скорости, которую можно измерить.
+     */
     private static boolean isCdnFriendly(String url) {
         if (url == null) return false;
         String u = url.toLowerCase();
+        if (isBodyless(u)) return false;
         return u.contains("cloudflare") || u.contains("cachefly");
     }
 
