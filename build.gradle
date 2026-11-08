@@ -47,7 +47,9 @@ android {
             manifest.srcFile 'AndroidManifest.xml'
             java.srcDirs = ['src']
             res.srcDirs = ['res']
-            assets.srcDirs = ['assets']
+            // docs/ подключён как второй каталог assets: база знаний (docs/KNOWLEDGE.txt)
+            // едет внутрь APK один в один, без копии и без расхождений.
+            assets.srcDirs = ['assets', 'docs']
             // предсобранных .so нет: всё нативное собирается из исходников ниже
             jniLibs.srcDirs = []
         }

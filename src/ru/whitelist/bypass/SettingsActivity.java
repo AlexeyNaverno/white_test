@@ -35,6 +35,7 @@ public class SettingsActivity extends Activity {
     private static final int REQ_EXPORT_SETTINGS = 1003;
     private static final int REQ_IMPORT_SETTINGS = 1004;
     private static final int REQ_SAVE_CONSOLE = 1005;
+    private static final int REQ_KNOWLEDGE = 1006;
     /** После импорта настроек нельзя сохранять то, что ещё нарисовано на экране. */
     private boolean skipSaveOnPause;
     /** Текст пула для экспорта: пишем в файл после того, как пользователь выбрал место. */
@@ -103,7 +104,7 @@ public class SettingsActivity extends Activity {
         // --- скорость ---
         section("Скорость");
         editMinSpeed = numberField(String.valueOf(Prefs.minSpeedKbit(this)));
-        label("Порог «рабочего» конфига, кбит/с (32 по умолчанию = 4 КБ/с)");
+        label("Порог «рабочего» конфига, кбит/с (32 по умолчанию = 4 КБ/с)", Help.MIN_SPEED);
         add(editMinSpeed);
         note("Единицы: 1 КБ/с = 8 кбит/с. По умолчанию 32 кбит/с — это 4 КБ/с: конфиг "
                 + "засчитывается, если качает быстрее 4 КБ/с. Порог низкий намеренно: живой, "
@@ -111,15 +112,15 @@ public class SettingsActivity extends Activity {
                 + "до 512 или 1024.");
 
         editLanes = numberField(String.valueOf(Prefs.speedLanes(this)));
-        label("Сколько ядер мерить скорость одновременно (1–4, по умолчанию 4)");
+        label("Сколько ядер мерить скорость одновременно (1–4, по умолчанию 4)", Help.SPEED_LANES);
         add(editLanes);
 
         editSpeedUrls = multiField(Prefs.join(Prefs.speedUrls(this)), 3);
-        label("Файлы для замера скорости (по одному на строку)");
+        label("Файлы для замера скорости (по одному на строку)", Help.SPEED_URLS);
         add(editSpeedUrls);
 
         editGateTimeout = numberField(String.valueOf(Prefs.gateTimeoutMs(this)));
-        label("Сколько ждём на один замер, мс (3000 по умолчанию)");
+        label("Сколько ждём на один замер, мс (3000 по умолчанию)", Help.GATE_TIMEOUT);
         add(editGateTimeout);
 
         note("Замер идёт на маленьких файлах (32 и 128 КБ) и в несколько дорожек параллельно: "
@@ -133,18 +134,18 @@ public class SettingsActivity extends Activity {
         // --- поиск ---
         section("Поиск и пинг");
         editThreads = numberField(String.valueOf(Prefs.pingThreads(this)));
-        label("Потоков пинга одновременно");
+        label("Потоков пинга одновременно", Help.PING_THREADS);
         add(editThreads);
         editTimeout = numberField(String.valueOf(Prefs.pingTimeoutMs(this)));
-        label("Таймаут пинга, мс (2000 по умолчанию)");
+        label("Таймаут пинга, мс (2000 по умолчанию)", Help.PING_TIMEOUT_MS);
         add(editTimeout);
 
         editPingTargets = multiField(Prefs.join(Prefs.pingTargets(this)), 5);
-        label("5 целей TCP-пинга «есть ли интернет» (host:port, по одной на строку)");
+        label("5 целей TCP-пинга «есть ли интернет» (host:port, по одной на строку)", Help.PING_TARGETS);
         add(editPingTargets);
 
         editHealthUrls = multiField(Prefs.join(Prefs.healthUrls(this)), 5);
-        label("5 мест проверки канала через туннель (URL, по одному на строку)");
+        label("5 мест проверки канала через туннель (URL, по одному на строку)", Help.HEALTH_URLS);
         add(editHealthUrls);
 
         note("1000 мс — это фильтр «более-менее работающих»: то, что пингуется дольше, "
@@ -157,6 +158,7 @@ public class SettingsActivity extends Activity {
         // --- источники ---
         section("Источники списков (по одному на строку)");
         editSources = multiField(Prefs.join(Prefs.sources(this)), 7);
+        label("По одной ссылке на строку; порядок = приоритет", Help.SOURCES);
         add(editSources);
         Button resetSources = smallButton("Вернуть источники по умолчанию");
         resetSources.setOnClickListener(new View.OnClickListener() {
@@ -165,16 +167,16 @@ public class SettingsActivity extends Activity {
                 toast("Применится после «Сохранить»");
             }
         });
-        add(resetSources);
+        addAction(resetSources, "Источники по умолчанию", Help.RESET_SOURCES);
 
         newPage("Обход");
 
         // --- DPI на линии ---
         section("DPI-обход");
         swDesync = switchRow("DPI-обход линии до VPN-сервера (ciadpi) — по умолчанию включён",
-                Prefs.desyncLine(this));
+                Prefs.desyncLine(this), Help.DESYNC_LINE);
         editStrategy = singleField(Prefs.dpiStrategy(this));
-        label("Стратегия ciadpi (аргументы командной строки)");
+        label("Стратегия ciadpi (аргументы командной строки)", Help.DPI_STRATEGY);
         add(editStrategy);
         Button recommended = smallButton("Вставить: " + Prefs.DEFAULT_STRATEGY);
         recommended.setOnClickListener(new View.OnClickListener() {
@@ -182,20 +184,20 @@ public class SettingsActivity extends Activity {
                 editStrategy.setText(Prefs.DEFAULT_STRATEGY);
             }
         });
-        add(recommended);
+        addAction(recommended, "Стратегия по умолчанию", Help.RECOMMENDED_STRATEGY);
         note("Сначала всегда пробуется прямое подключение. Через ciadpi — только если оно "
                 + "не прошло (первые 3 конфига). TLS к серверу при этом фрагментируется, "
                 + "поэтому для Reality этот путь может не сработать.");
 
         swDpiAutotune = switchRow("Подбирать стратегию автоматически (только вместе с DPI-обходом)",
-                Prefs.dpiAutotune(this));
+                Prefs.dpiAutotune(this), Help.DPI_AUTOTUNE);
         note("При подключении приложение по очереди поднимает ciadpi с разными стратегиями "
                 + "и проверяет, открываются ли заблокированные адреса. Первая подошедшая "
                 + "сохраняется и используется дальше. Это занимает до ~30 секунд один раз "
                 + "за подключение.");
 
         editDpiSources = multiField(Prefs.join(Prefs.dpiSources(this)), 3);
-        label("Откуда брать стратегии (по одной ссылке на строку)");
+        label("Откуда брать стратегии (по одной ссылке на строку)", Help.DPI_SOURCES);
         add(editDpiSources);
 
         // Рабочие стратегии: те, с которыми конфиги реально заработали (их же пробуем
@@ -218,7 +220,7 @@ public class SettingsActivity extends Activity {
                 recreate();
             }
         });
-        add(forgetStrategies);
+        addAction(forgetStrategies, "Забыть рабочие стратегии", Help.FORGET_STRATEGIES);
 
         Button refreshDpi = smallButton("Обновить стратегии с GitHub");
         refreshDpi.setOnClickListener(new View.OnClickListener() {
@@ -250,7 +252,7 @@ public class SettingsActivity extends Activity {
                 t.start();
             }
         });
-        add(refreshDpi);
+        addAction(refreshDpi, "Обновить стратегии", Help.REFRESH_DPI);
 
         Button dpiProbe = smallButton("Проверить стратегии сейчас");
         dpiProbe.setOnClickListener(new View.OnClickListener() {
@@ -283,12 +285,12 @@ public class SettingsActivity extends Activity {
                 t.start();
             }
         });
-        add(dpiProbe);
+        addAction(dpiProbe, "Проверить стратегии", Help.DPI_PROBE);
 
         // --- ядро ---
         section("Ядро Xray");
         swNoTls = switchRow("Разрешать конфиги без TLS (через локальный ретранслятор)",
-                Prefs.allowNoTls(this));
+                Prefs.allowNoTls(this), Help.ALLOW_NO_TLS);
         note("Xray 26 отказывается поднимать VLESS/Trojan без TLS к публичному адресу: "
                 + "разрешены только приватные IP и локальные домены. Под это правило попадает "
                 + "больше половины публичных списков (ws за CDN, обычный tcp без tls). "
@@ -300,17 +302,17 @@ public class SettingsActivity extends Activity {
         // --- сеть ---
         section("Сеть");
         editVpnDns = singleField(Prefs.vpnDns(this));
-        label("DNS для туннеля");
+        label("DNS для туннеля", Help.VPN_DNS);
         add(editVpnDns);
-        swIpv6 = switchRow("Маршрутизировать IPv6", Prefs.ipv6(this));
-        swAutoSwitch = switchRow("Переключать конфиг, если канал не отвечает", Prefs.autoSwitch(this));
+        swIpv6 = switchRow("Маршрутизировать IPv6", Prefs.ipv6(this), Help.IPV6);
+        swAutoSwitch = switchRow("Переключать конфиг, если канал не отвечает", Prefs.autoSwitch(this), Help.AUTO_SWITCH);
         editMonitor = numberField(String.valueOf(Prefs.monitorIntervalSec(this)));
-        label("Проверка канала каждые, сек");
+        label("Проверка канала каждые, сек", Help.MONITOR_INTERVAL);
         add(editMonitor);
         editSwitchTimeout = numberField(String.valueOf(Prefs.switchTimeoutSec(this)));
-        label("Секунд без ответа до переключения");
+        label("Секунд без ответа до переключения", Help.SWITCH_TIMEOUT);
         add(editSwitchTimeout);
-        swBoot = switchRow("Подключаться при загрузке", Prefs.bootConnect(this));
+        swBoot = switchRow("Подключаться при загрузке", Prefs.bootConnect(this), Help.BOOT_CONNECT);
 
         newPage("Tor");
 
@@ -321,9 +323,9 @@ public class SettingsActivity extends Activity {
                 + "тогда трафик идёт через мосты (медленно, но связь есть). Обычным режимом "
                 + "Tor не включается.");
         swTorFallback = switchRow("Если VPN не отвечает — пускать трафик через Tor-мосты",
-                Prefs.torFallback(this));
+                Prefs.torFallback(this), Help.TOR_FALLBACK);
         editTorBridges = multiField(Prefs.torBridges(this), 4);
-        label("Мосты (пусто — встроенные Vanilla)");
+        label("Мосты (пусто — встроенные Vanilla)", Help.TOR_BRIDGES);
         add(editTorBridges);
         Button fillBridges = smallButton("Вставить встроенные Vanilla-мосты");
         fillBridges.setOnClickListener(new View.OnClickListener() {
@@ -333,10 +335,10 @@ public class SettingsActivity extends Activity {
         });
         add(fillBridges);
         editTorExtra = multiField(Prefs.torExtraTorrc(this), 2);
-        label("Дополнительные строки torrc");
+        label("Дополнительные строки torrc", Help.TOR_EXTRA_TORRC);
         add(editTorExtra);
 
-        label("Лимит ожидания одного моста, секунд (5–120)");
+        label("Лимит ожидания одного моста, секунд (5–120)", Help.TOR_BRIDGE_WAIT);
         editTorBridgeWait = numberField(String.valueOf(Prefs.torBridgeWaitSec(this)));
         editTorBridgeWait.setInputType(InputType.TYPE_CLASS_NUMBER);
         add(editTorBridgeWait);
@@ -384,7 +386,7 @@ public class SettingsActivity extends Activity {
                 t.start();
             }
         });
-        add(checkTor);
+        addAction(checkTor, "Проверка мостов", Help.CHECK_TOR);
 
         Button browser = smallButton("Браузер (только Tor с мостами, поиск DuckDuckGo)");
         browser.setTextColor(0xFFB388FF);
@@ -395,7 +397,7 @@ public class SettingsActivity extends Activity {
                 startActivity(new android.content.Intent(SettingsActivity.this, BrowserActivity.class));
             }
         });
-        add(browser);
+        addAction(browser, "Встроенный браузер", Help.BROWSER);
         note("Браузер — отдельный экран: одна вкладка, поиск через GET-формы, и ходит он "
                 + "только через Tor с мостами. Если мостов нет или VPN включён, он скажет об этом.");
 
@@ -434,7 +436,7 @@ public class SettingsActivity extends Activity {
                 }
             }
         });
-        add(exportPool);
+        addAction(exportPool, "Экспорт пула", Help.EXPORT_POOL);
 
         Button importPool = smallButton("Импорт .txt: дубликаты → пинг → скорость");
         importPool.setOnClickListener(new View.OnClickListener() {
@@ -449,7 +451,7 @@ public class SettingsActivity extends Activity {
                 }
             }
         });
-        add(importPool);
+        addAction(importPool, "Импорт пула", Help.IMPORT_POOL);
 
         // --- настройки файлом ---
         section("Настройки файлом: .json");
@@ -473,7 +475,7 @@ public class SettingsActivity extends Activity {
                 }
             }
         });
-        add(exportSettings);
+        addAction(exportSettings, "Экспорт настроек", Help.EXPORT_SETTINGS);
 
         Button importSettings = smallButton("Импорт настроек из .json");
         importSettings.setOnClickListener(new View.OnClickListener() {
@@ -488,7 +490,7 @@ public class SettingsActivity extends Activity {
                 }
             }
         });
-        add(importSettings);
+        addAction(importSettings, "Импорт настроек", Help.IMPORT_SETTINGS);
 
         // --- наборы настроек: выбираются из списка, импортированные добавляются сюда же ---
         section("Наборы настроек");
@@ -538,7 +540,7 @@ public class SettingsActivity extends Activity {
                 recreate();
             }
         });
-        add(applyPreset);
+        addAction(applyPreset, "Применить набор", Help.PRESETS);
 
         Button deletePreset = smallButton("Удалить выбранный набор (только свой из .json)");
         deletePreset.setOnClickListener(new View.OnClickListener() {
@@ -558,7 +560,7 @@ public class SettingsActivity extends Activity {
                 recreate();
             }
         });
-        add(deletePreset);
+        addAction(deletePreset, "Удалить набор", Help.PRESETS);
 
         Button saveConsole = smallButton("Сохранить консоль в .json");
         saveConsole.setOnClickListener(new View.OnClickListener() {
@@ -575,14 +577,14 @@ public class SettingsActivity extends Activity {
                 }
             }
         });
-        add(saveConsole);
+        addAction(saveConsole, "Сохранить консоль", Help.SAVE_CONSOLE);
         note("Консоль — это лог с главного экрана: пинг, замер, причины отказов, мосты. "
                 + "Файл содержит строки и склеенный текст, версию приложения и число конфигов "
                 + "в пуле.");
 
         // --- данные ---
         section("Данные");
-        swEmbedded = switchRow("Встроенный резерв конфигов", Prefs.embeddedEnabled(this));
+        swEmbedded = switchRow("Встроенный резерв конфигов", Prefs.embeddedEnabled(this), Help.EMBEDDED);
         // Чёрный список: конфиги, которые уже проверяли и они не работали. Их не пингуем
         // неделю — иначе каждый сбор пула заново тратит время на одно и то же.
         final int blacklisted = Blacklist.size(this);
@@ -606,7 +608,7 @@ public class SettingsActivity extends Activity {
                 toast("Список нерабочих конфигураций очищен");
             }
         });
-        add(clearBlacklist);
+        addAction(clearBlacklist, "Чёрный список", Help.CLEAR_BLACKLIST);
 
         Button clearAll = smallButton("Удалить скачанные списки и пул");
         clearAll.setOnClickListener(new View.OnClickListener() {
@@ -616,7 +618,7 @@ public class SettingsActivity extends Activity {
                 toast("Скачанные списки и пул удалены (встроенный резерв остался)");
             }
         });
-        add(clearAll);
+        addAction(clearAll, "Удалить списки и пул", Help.CLEAR_ALL);
 
         Button battery = smallButton("Разрешить работу в фоне (без выгрузки)");
         battery.setOnClickListener(new View.OnClickListener() {
@@ -624,7 +626,7 @@ public class SettingsActivity extends Activity {
                 PermissionsHelper.requestBatteryExemption(SettingsActivity.this);
             }
         });
-        add(battery);
+        addAction(battery, "Работа в фоне", Help.BATTERY);
 
         // --- инфо: о проекте, донат, идеи ---
         newPage("Инфо");
@@ -664,6 +666,55 @@ public class SettingsActivity extends Activity {
         add(copyDonate);
         note("USDT (jetton в сети TON). Проверяйте адрес при копировании: это единственный.");
 
+        section("База знаний");
+        note("Подробное описание каждой настройки и каждой функции — в файле "
+                + "docs/KNOWLEDGE.txt (он же внутри приложения). Он написан так, чтобы его "
+                + "можно было отдать LLM: ключи настроек, диапазоны, значения по умолчанию, "
+                + "что именно приложение делает со значением и какие крайности всё ломают. "
+                + "Порядок работы: экспорт настроек → правка вместе с базой знаний → импорт обратно.");
+        Button showKnowledge = smallButton("Открыть базу знаний");
+        showKnowledge.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                String text = readAsset("KNOWLEDGE.txt");
+                if (text.isEmpty()) {
+                    toast("База знаний не найдена в приложении");
+                    return;
+                }
+                TextView tv = new TextView(SettingsActivity.this);
+                int pad = dp(16);
+                tv.setPadding(pad, pad, pad, pad);
+                tv.setText(text);
+                tv.setTextSize(12);
+                tv.setTextColor(TEXT);
+                tv.setTextIsSelectable(true);
+                ScrollView holder = new ScrollView(SettingsActivity.this);
+                holder.addView(tv);
+                Help.showView(SettingsActivity.this, "База знаний", holder);
+            }
+        });
+        addAction(showKnowledge, "База знаний", Help.KNOWLEDGE);
+
+        Button exportKnowledge = smallButton("Экспорт базы знаний в .txt");
+        exportKnowledge.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                pendingExport = readAsset("KNOWLEDGE.txt");
+                if (pendingExport.isEmpty()) {
+                    toast("База знаний не найдена в приложении");
+                    return;
+                }
+                Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("text/plain");
+                intent.putExtra(Intent.EXTRA_TITLE, "whitelist-knowledge.txt");
+                try {
+                    startActivityForResult(intent, REQ_KNOWLEDGE);
+                } catch (Exception e) {
+                    toast("Нет приложения для сохранения файла");
+                }
+            }
+        });
+        addAction(exportKnowledge, "Экспорт базы знаний", Help.KNOWLEDGE);
+
         section("Проекты, которым нужна поддержка");
         note("1. Медленный канал до внешнего интернета, который стабильно работает при белых "
                 + "списках, бесплатный для всех пользователей рунета — и приложение для его "
@@ -697,7 +748,7 @@ public class SettingsActivity extends Activity {
         }
 
         TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.1.7\n"
+        footer.setText("Обход Белых Списков 0.1.8\n"
                 + versionLine() + "\n"
                 + "Открытый проект без разработчика: код под GPL-3.0, форкайте и переписывайте.\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");
@@ -733,6 +784,18 @@ public class SettingsActivity extends Activity {
             }, "pool-export").start();
         } else if (requestCode == REQ_IMPORT) {
             startImport(uri);
+        } else if (requestCode == REQ_KNOWLEDGE) {
+            final String text = pendingExport;
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    final boolean ok = writeTo(uri, text);
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            toast(ok ? "База знаний сохранена в .txt" : "Не удалось сохранить файл");
+                        }
+                    });
+                }
+            }, "knowledge-export").start();
         } else if (requestCode == REQ_EXPORT_SETTINGS || requestCode == REQ_SAVE_CONSOLE) {
             final boolean settings = requestCode == REQ_EXPORT_SETTINGS;
             final String text = pendingExport;
@@ -939,12 +1002,55 @@ public class SettingsActivity extends Activity {
     }
 
     private void label(String text) {
+        label(text, null);
+    }
+
+    /**
+     * Подпись к полю + «ⓘ» с подробной справкой. Справка — то же, что в базе знаний
+     * (docs/KNOWLEDGE.txt), только коротко: где значение применяется и что будет,
+     * если поставить крайность.
+     */
+    private void label(String text, String help) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.BOTTOM);
+        row.setPadding(0, dp(2), 0, dp(10));
         TextView tv = new TextView(this);
         tv.setText(text);
         tv.setTextColor(TEXT_DIM);
         tv.setTextSize(11);
-        tv.setPadding(0, dp(2), 0, dp(10));
-        add(tv);
+        tv.setLayoutParams(new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(tv);
+        if (help != null) row.addView(infoButton(text, help));
+        add(row);
+    }
+
+    /** Кнопка «ⓘ» — открывает справку по пункту. */
+    private View infoButton(final String title, final String help) {
+        TextView b = new TextView(this);
+        b.setText("ⓘ");
+        b.setTextColor(0xFF3DDC84);
+        b.setTextSize(16);
+        b.setPadding(dp(8), 0, dp(4), 0);
+        b.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                Help.show(SettingsActivity.this, title, help);
+            }
+        });
+        return b;
+    }
+
+    /** Кнопка-действие в паре с «ⓘ»: что именно произойдёт по нажатию. */
+    private void addAction(Button button, String title, String help) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        button.setLayoutParams(new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(button);
+        row.addView(infoButton(title, help));
+        add(row);
     }
 
     private void note(String text) {
@@ -992,6 +1098,10 @@ public class SettingsActivity extends Activity {
     }
 
     private Switch switchRow(String text, boolean checked) {
+        return switchRow(text, checked, null);
+    }
+
+    private Switch switchRow(String text, boolean checked, String help) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -1002,6 +1112,7 @@ public class SettingsActivity extends Activity {
         tv.setTextSize(13);
         tv.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         row.addView(tv);
+        if (help != null) row.addView(infoButton(text, help));
         Switch sw = new Switch(this);
         sw.setChecked(checked);
         row.addView(sw);
@@ -1042,6 +1153,20 @@ public class SettingsActivity extends Activity {
             if (!t.isEmpty()) sb.append(t).append('\n');
         }
         return sb.toString().trim();
+    }
+
+    /** Прочитать asset целиком (нужно для базы знаний). */
+    private String readAsset(String asset) {
+        StringBuilder sb = new StringBuilder();
+        try (InputStream in = getAssets().open(asset);
+             java.io.BufferedReader r = new java.io.BufferedReader(
+                     new java.io.InputStreamReader(in, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = r.readLine()) != null) sb.append(line).append('\n');
+        } catch (Exception e) {
+            return "";
+        }
+        return sb.toString();
     }
 
     private String readAssetFirstN(String asset, int n) {
