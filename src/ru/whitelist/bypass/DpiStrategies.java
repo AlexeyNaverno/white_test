@@ -173,7 +173,13 @@ public final class DpiStrategies {
     public static String autotune(Context c, String sni, Log log) {
         String current = Prefs.dpiStrategy(c);
         int tried = 0;
+        // Сначала те, что уже приносили рабочий конфиг на этой сети: их проверять дешевле,
+        // чем перебирать весь список заново.
+        List<String> order = new ArrayList<>(working(c));
         for (String st : list(c)) {
+            if (!order.contains(st)) order.add(st);
+        }
+        for (String st : order) {
             if (ConfigRepository.isCancelled()) break;
             if (tried >= AUTOTUNE_MAX) break;
             tried++;
@@ -188,6 +194,46 @@ public final class DpiStrategies {
             log.line("DPI: из " + tried + " стратегий ни одна не пробилась — остаётся текущая");
         }
         return current;
+    }
+
+    // --- рабочие стратегии: те, с которыми конфиги реально заработали ---
+
+    /** Отдельный файл: это результат проверок, а не настройка (в .json не экспортируется). */
+    private static final String WORKING_FILE = "bypass_dpi_working";
+    private static final String WORKING_KEY = "list";
+    private static final int WORKING_MAX = 8;
+
+    /** Стратегии, которые уже приносили рабочий конфиг. Свежие — первыми. */
+    public static synchronized List<String> working(Context c) {
+        List<String> out = new ArrayList<>();
+        String data = c.getSharedPreferences(WORKING_FILE, Context.MODE_PRIVATE)
+                .getString(WORKING_KEY, "");
+        if (data == null || data.isEmpty()) return out;
+        for (String line : data.split("\n")) {
+            String t = line.trim();
+            if (!t.isEmpty() && !out.contains(t)) out.add(t);
+        }
+        return out;
+    }
+
+    /** Запомнить стратегию, с которой конфиг прошёл замер (с сохранением порядка). */
+    public static synchronized void rememberWorking(Context c, String strategy) {
+        if (strategy == null || strategy.trim().isEmpty()) return;
+        List<String> list = working(c);
+        String st = strategy.trim();
+        list.remove(st);
+        list.add(0, st);
+        while (list.size() > WORKING_MAX) list.remove(list.size() - 1);
+        StringBuilder sb = new StringBuilder();
+        for (String s : list) sb.append(s).append('\n');
+        c.getSharedPreferences(WORKING_FILE, Context.MODE_PRIVATE)
+                .edit().putString(WORKING_KEY, sb.toString()).apply();
+    }
+
+    /** Забыть все рабочие стратегии (например, после смены оператора). */
+    public static synchronized void clearWorking(Context c) {
+        c.getSharedPreferences(WORKING_FILE, Context.MODE_PRIVATE)
+                .edit().remove(WORKING_KEY).apply();
     }
 
     /** Короткая строка для лога. */

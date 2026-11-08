@@ -1,0 +1,5 @@
+• Quick search is faster: ping runs in chunks of 25, and as soon as something answers, its speed is tested right away instead of after pinging all 150.
+• Blacklist of configs that do not work: they are not pinged again for a week (Settings → Data → clear the list).
+• Working DPI strategies are stored together with configs: when a config only worked through the bypass, the pool keeps the "config + strategy" pair and reuses it on connect.
+• Settings are split into tabs: Lists, Bypass, Tor, Data, Info.
+• New Info tab: about the project (open, no developer), donation, and ideas that need support.

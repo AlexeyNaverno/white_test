@@ -60,6 +60,11 @@ public class MainActivity extends Activity {
     private static final int POOL_ENOUGH = 25;
     /** Замер из пула моложе этого возраста переиспользуем, не гоняя конфиг заново. */
     private static final long POOL_REUSE_MS = 12 * 60 * 60 * 1000L;
+    /**
+     * Сколько конфигов за один сбор перепроверить через ciadpi. Мало: линия одна,
+     * замер идёт по очереди, и каждый — до нескольких секунд.
+     */
+    private static final int DPI_RETRIES = 8;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
 
@@ -551,6 +556,7 @@ public class MainActivity extends Activity {
     private void adopt(ProxyConfig cfg, long kbps) {
         Prefs.setCurrentConfig(this, cfg.raw, cfg.name, cfg.host, cfg.port);
         Pool.remember(this, cfg.raw, kbps, cfg.latency);
+        Blacklist.forget(this, cfg.raw);   // он работает — приговор снимаем
     }
 
     private void finishOk(final String name, final long kbps) {
@@ -625,6 +631,23 @@ public class MainActivity extends Activity {
                     if (all.isEmpty()) {
                         uiLog("Все конфиги несовместимы с ядром — обновите источники в настройках");
                         return;
+                    }
+
+                    // 1.1b) Чёрный список: то, что уже проверяли и оно не работало, не
+                    // пингуем вовсе. Запись живёт неделю — потом конфиг перепроверяется.
+                    int inBlacklist = Blacklist.size(MainActivity.this);
+                    if (inBlacklist > 0) {
+                        int before = all.size();
+                        all = Blacklist.filter(MainActivity.this, all);
+                        int skipped = before - all.size();
+                        uiLog("Чёрный список: " + inBlacklist + " нерабочих"
+                                + (skipped > 0 ? ", из них " + skipped + " есть в текущих списках — пропускаю"
+                                                : " (в текущих списках их нет)"));
+                        if (all.isEmpty()) {
+                            uiLog("Все конфиги в чёрном списке — очистите его в настройках"
+                                    + " (Данные → «Очистить список нерабочих конфигураций»)");
+                            return;
+                        }
                     }
 
                     // 1.2) стратегии DPI: тот же сбор пула — удобный момент их обновить.
@@ -759,12 +782,16 @@ public class MainActivity extends Activity {
                                     boolean passed = r.ok && r.kbps >= min;
                                     if (passed) {
                                         measuredOk.incrementAndGet();
+                                        Blacklist.forget(MainActivity.this, cfg.raw);
                                         synchronized (found) {
                                             found.add(new Pool.Entry(cfg.raw, r.kbps,
                                                     cfg.latency, System.currentTimeMillis()));
                                         }
                                     } else {
                                         bump(why, r.reason);
+                                        // Ядро не поднялось / данных нет — конфиг в чёрный
+                                        // список: в следующий раз его даже не пингуем.
+                                        if (r.hard) Blacklist.add(MainActivity.this, cfg, r.reason);
                                     }
                                     int d = done.incrementAndGet();
                                     if (d % 5 == 0 || d == total || passed) {
@@ -780,6 +807,52 @@ public class MainActivity extends Activity {
                     }
                     lane.shutdown();
                     lane.awaitTermination(2, TimeUnit.HOURS);
+
+                    // 2.5) DPI-обход для тех, кто не дал данных напрямую. Параллельно
+                    // нельзя: ciadpi один, поэтому по очереди и с ограничением. Успех
+                    // запоминается в пул вместе со стратегией — при подключении возьмём её.
+                    if (!ConfigRepository.isCancelled() && Prefs.desyncLine(MainActivity.this)
+                            && measuredOk.get() < POOL_ENOUGH) {
+                        final String strategy = Prefs.dpiStrategy(MainActivity.this);
+                        java.util.Set<String> okKeys = new java.util.HashSet<>();
+                        synchronized (found) {
+                            for (Pool.Entry e : found) {
+                                String k = ConfigRepository.canonicalKey(e.raw);
+                                if (k != null) okKeys.add(k);
+                            }
+                        }
+                        int tried = 0;
+                        for (ProxyConfig cfg : work) {
+                            if (ConfigRepository.isCancelled()) break;
+                            if (tried >= DPI_RETRIES || measuredOk.get() >= POOL_ENOUGH) break;
+                            String key = ConfigRepository.canonicalKey(cfg.raw);
+                            if (key != null && okKeys.contains(key)) continue;
+                            tried++;
+                            uiLog("DPI-обход: " + truncate(cfg.name, 26) + " через "
+                                    + DpiStrategies.shorten(strategy));
+                            Probe.Result r = Probe.measureConfig(MainActivity.this, cfg,
+                                    Prefs.gateTimeoutMs(MainActivity.this), strategy);
+                            if (r.ok && r.kbps >= min) {
+                                measuredOk.incrementAndGet();
+                                Blacklist.forget(MainActivity.this, cfg.raw);
+                                DpiStrategies.rememberWorking(MainActivity.this, strategy);
+                                synchronized (found) {
+                                    found.add(new Pool.Entry(cfg.raw, r.kbps, cfg.latency,
+                                            System.currentTimeMillis(), strategy));
+                                }
+                                uiLog("  + через DPI: " + Prefs.speedText(r.kbps) + " · "
+                                        + DpiStrategies.shorten(strategy));
+                            } else {
+                                bump(why, r.reason);
+                                if (r.hard) Blacklist.add(MainActivity.this, cfg, r.reason);
+                                uiLog("  → через DPI не прошёл · " + r.reason);
+                            }
+                        }
+                        if (tried > 0) {
+                            uiLog("DPI-обход: проверено " + tried + ", рабочих в пуле "
+                                    + found.size());
+                        }
+                    }
 
                     List<Pool.Entry> snapshot;
                     synchronized (found) {
