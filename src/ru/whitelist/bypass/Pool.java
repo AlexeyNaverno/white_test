@@ -21,6 +21,9 @@ import java.util.List;
  * с самого быстрого живого конфига.
  *
  * Формат строки: <КБ/с> TAB <пинг, мс> TAB <время замера, мс> TAB <конфиг>
+ * Если конфиг заработал только через DPI-обход, в строке появляется пятое поле:
+ * <КБ/с> TAB <пинг> TAB <время> TAB <стратегия> TAB <конфиг> — тогда при подключении
+ * берётся именно эта стратегия, а не «текущая из настроек».
  */
 public final class Pool {
     private Pool() {}
@@ -34,12 +37,24 @@ public final class Pool {
         public final long kbps;
         public final long pingMs;
         public final long at;
+        /** Стратегия DPI-обхода, с которой конфиг замерен; "" — напрямую. */
+        public final String dpi;
 
         public Entry(String raw, long kbps, long pingMs, long at) {
+            this(raw, kbps, pingMs, at, "");
+        }
+
+        public Entry(String raw, long kbps, long pingMs, long at, String dpi) {
             this.raw = raw;
             this.kbps = kbps;
             this.pingMs = pingMs;
             this.at = at;
+            this.dpi = dpi == null ? "" : dpi.trim();
+        }
+
+        /** Конфиг замерен через DPI-обход (нужна стратегия, чтобы повторить). */
+        public boolean viaDpi() {
+            return !dpi.isEmpty();
         }
 
         /** Разобранный конфиг (null, если строка испорчена). */
@@ -91,15 +106,22 @@ public final class Pool {
         if (line == null) return null;
         String t = line.trim();
         if (t.isEmpty()) return null;
-        String[] parts = t.split("\t", 4);
+        String[] parts = t.split("\t", 5);
         if (parts.length < 4) return null;
         try {
             long kbps = Long.parseLong(parts[0].trim());
             long ping = Long.parseLong(parts[1].trim());
             long at = Long.parseLong(parts[2].trim());
-            String raw = parts[3].trim();
+            String dpi = "";
+            String raw;
+            if (parts.length >= 5) {
+                dpi = parts[3].trim();
+                raw = parts[4].trim();
+            } else {
+                raw = parts[3].trim();
+            }
             if (raw.isEmpty() || kbps <= 0) return null;
-            return new Entry(raw, kbps, ping, at);
+            return new Entry(raw, kbps, ping, at, dpi);
         } catch (NumberFormatException e) {
             return null;
         }
@@ -124,8 +146,9 @@ public final class Pool {
             if (n >= MAX_ENTRIES) break;
             sb.append(e.kbps).append('\t')
               .append(e.pingMs).append('\t')
-              .append(e.at).append('\t')
-              .append(e.raw).append('\n');
+              .append(e.at).append('\t');
+            if (e.viaDpi()) sb.append(e.dpi).append('\t');   // пятое поле только когда нужно
+            sb.append(e.raw).append('\n');
             n++;
         }
         try (FileOutputStream fos = new FileOutputStream(file(c), false)) {
@@ -137,6 +160,12 @@ public final class Pool {
 
     /** Добавить/обновить один конфиг (используется после удачного подключения и быстрого поиска). */
     public static synchronized void remember(Context c, String raw, long kbps, long pingMs) {
+        remember(c, raw, kbps, pingMs, null);
+    }
+
+    /** То же, но с записью стратегии DPI-обхода, с которой конфиг заработал. */
+    public static synchronized void remember(Context c, String raw, long kbps, long pingMs,
+                                             String dpi) {
         if (raw == null || raw.trim().isEmpty() || kbps <= 0) return;
         String key = ConfigRepository.canonicalKey(raw);
         List<Entry> list = load(c);
@@ -145,7 +174,8 @@ public final class Pool {
             if (ConfigRepository.canonicalKey(e.raw).equals(key)) continue;
             out.add(e);
         }
-        out.add(new Entry(raw.trim(), kbps, pingMs < 0 ? -1 : pingMs, System.currentTimeMillis()));
+        out.add(new Entry(raw.trim(), kbps, pingMs < 0 ? -1 : pingMs,
+                System.currentTimeMillis(), dpi));
         save(c, out);
     }
 
@@ -153,6 +183,16 @@ public final class Pool {
         File f = file(c);
         if (f.isFile()) f.delete();
         Prefs.setPoolBuiltAt(c, 0L);
+    }
+
+    /** Стратегия DPI-обхода, с которой этот конфиг замерен ("" — напрямую или его нет в пуле). */
+    public static String dpiFor(Context c, String raw) {
+        String key = ConfigRepository.canonicalKey(raw);
+        if (key == null) return "";
+        for (Entry e : load(c)) {
+            if (key.equals(ConfigRepository.canonicalKey(e.raw))) return e.dpi;
+        }
+        return "";
     }
 
     public static int count(Context c) {

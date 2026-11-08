@@ -82,17 +82,34 @@ public final class Probe {
         /** Человеческая причина: чем закончилась проверка. */
         public final String reason;
         public final Speed speed;
+        /**
+         * Отказ «жёсткий»: ядро не поднялось, SOCKS не открылся, данных нет. Такой
+         * конфиг можно сразу отправлять в чёрный список. «Ниже порога» и «поиск
+         * остановлен» — нет: конфиг рабочий, просто медленный/не успели проверить.
+         */
+        public final boolean hard;
 
         public Result(boolean ok, long kbps, long socksPort, String reason, Speed speed) {
+            this(ok, kbps, socksPort, reason, speed, false);
+        }
+
+        public Result(boolean ok, long kbps, long socksPort, String reason, Speed speed,
+                      boolean hard) {
             this.ok = ok;
             this.kbps = kbps;
             this.socksPort = socksPort;
             this.reason = reason == null ? "" : reason;
             this.speed = speed;
+            this.hard = hard;
         }
 
         static Result fail(String reason) {
             return new Result(false, -1, -1, reason, null);
+        }
+
+        /** Отказ, после которого конфиг можно не проверять неделю. */
+        static Result dead(String reason) {
+            return new Result(false, -1, -1, reason, null, true);
         }
 
         /** Короткая строка для лога. */
@@ -334,6 +351,18 @@ public final class Probe {
 
     /** Проверить конфиг «с нуля»: поднять, замерить, погасить. */
     public static Result measureConfig(Context ctx, ProxyConfig cfg, int timeoutMs) {
+        return measureConfig(ctx, cfg, timeoutMs, null);
+    }
+
+    /**
+     * То же, но линия до сервера идёт через локальный ciadpi со стратегией
+     * {@code dpiStrategy}. Так находится связка «конфиг ↔ стратегия»: конфиг, который
+     * напрямую не отдаёт данных, часто работает через фрагментацию TLS.
+     *
+     * @param dpiStrategy null/"" — мерить напрямую
+     */
+    public static Result measureConfig(Context ctx, ProxyConfig cfg, int timeoutMs,
+                                       String dpiStrategy) {
         if (cfg == null) return Result.fail("пустой конфиг");
         if (!cfg.supported) return Result.fail("схема " + cfg.scheme + " не поддерживается");
         String bad = XrayEngine.compatProblem(cfg, Prefs.allowNoTls(ctx));
@@ -341,27 +370,40 @@ public final class Probe {
         if (ConfigRepository.isCancelled()) return Result.fail("поиск остановлен");
         int port = freePort();
         if (port <= 0) return Result.fail("нет свободного порта");
+
+        boolean viaDpi = dpiStrategy != null && !dpiStrategy.trim().isEmpty();
+        int desyncPort = 0;
+        if (viaDpi) {
+            String sni = cfg.tlsServerName();
+            if (sni == null || sni.isEmpty()) sni = cfg.host;
+            desyncPort = DesyncLine.start(dpiStrategy, sni);
+            if (desyncPort <= 0) return Result.fail("DPI-обход не поднялся");
+        }
+
         CoreController controller = null;
         try {
-            String json = XrayEngine.buildConfigJson(cfg, port, false, Prefs.vpnDns(ctx), 0);
+            String json = XrayEngine.buildConfigJson(cfg, port, false, Prefs.vpnDns(ctx),
+                    desyncPort);
             controller = XrayEngine.startInstance(ctx, json);
         } catch (Throwable t) {
             String m = XrayEngine.explainCoreError(t.getMessage());
-            return Result.fail(m.startsWith("ядро") ? m : "ядро не запустилось: " + m);
+            if (viaDpi) DesyncLine.stop();
+            return Result.dead(m.startsWith("ядро") ? m : "ядро не запустилось: " + m);
         }
         try {
             if (!waitSocks(port, SOCKS_WAIT_MS)) {
                 return new Result(false, -1, port,
-                        "SOCKS не открылся за " + (SOCKS_WAIT_MS / 1000) + " с", null);
+                        "SOCKS не открылся за " + (SOCKS_WAIT_MS / 1000) + " с", null, true);
             }
             // Три попытки: GitHub может быть закрыт, Cloudflare — открыт (и наоборот).
             Speed s = measureSpeed(ctx, port, timeoutMs, 3);
             if (!s.ok()) {
-                return new Result(false, -1, port, s.text(), s);
+                return new Result(false, -1, port, s.text(), s, true);
             }
             return new Result(true, s.kbps, port, "", s);
         } finally {
             XrayEngine.stopInstance(controller);
+            if (viaDpi) DesyncLine.stop();
         }
     }
 }

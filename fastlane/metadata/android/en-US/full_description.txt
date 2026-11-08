@@ -25,4 +25,5 @@ Highlights:
 • Settings and the console can be exported to .json for troubleshooting.
 • All cores (Xray, ByeDPI, Tor) run locally; no root required.
 
+An open project with no developer: the app has no author or owner, the code is GPL-3.0 — fork it, rewrite it, ship your own build.
 License: GPL-3.0. Source code: https://github.com/AlexeyNaverno/white_test

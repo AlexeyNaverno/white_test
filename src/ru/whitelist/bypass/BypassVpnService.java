@@ -447,6 +447,13 @@ public class BypassVpnService extends VpnService {
             return false;
         } finally {
             if (!ok && desyncPort > 0) stopDesync();
+            if (ok && cfg != null) {
+                Blacklist.forget(this, cfg.raw);
+                if (desyncPort > 0) {
+                    DpiStrategies.rememberWorking(this, Pool.dpiFor(this, cfg.raw).isEmpty()
+                            ? Prefs.dpiStrategy(this) : Pool.dpiFor(this, cfg.raw));
+                }
+            }
         }
     }
 
@@ -475,7 +482,14 @@ public class BypassVpnService extends VpnService {
             }
             int port = Probe.freePort();
             if (port <= 0) return 0;
-            String[] args = DpiArgs.build(Prefs.dpiStrategy(this), port, sni);
+            // Если этот конфиг в пуле замерен через DPI-обход, берём ровно ту стратегию:
+            // именно она дала рабочий канал, а не «текущая из настроек».
+            String saved = cfg != null ? Pool.dpiFor(this, cfg.raw) : "";
+            String strategy = saved.isEmpty() ? Prefs.dpiStrategy(this) : saved;
+            if (!saved.isEmpty()) {
+                Log.i(TAG, "DPI: стратегия из пула — " + DpiStrategies.shorten(saved));
+            }
+            String[] args = DpiArgs.build(strategy, port, sni);
             ByeDpiProxy proxy = new ByeDpiProxy();
             desyncProxy = proxy;
             Thread t = new Thread(new Runnable() {

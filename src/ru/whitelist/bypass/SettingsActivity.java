@@ -12,6 +12,7 @@ import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -48,6 +49,16 @@ public class SettingsActivity extends Activity {
     private static final int TEXT_DIM = 0xFF8CA3B8;
 
     private LinearLayout root;
+    /** Вкладки-разделы: содержимое каждой страницы лежит в своём контейнере. */
+    private LinearLayout tabBar;
+    private LinearLayout pageHost;
+    private LinearLayout pageBox;
+    private ScrollView pageScroll;
+    private final java.util.List<LinearLayout> pageViews = new java.util.ArrayList<>();
+    private final java.util.List<Button> pageTabs = new java.util.ArrayList<>();
+    private int currentPage = 0;
+    /** Куда писать вывод проверки DPI (живёт на странице «Обход»). */
+    private TextView dpiOut;
 
     private EditText editSources, editSpeedUrls, editMinSpeed, editThreads, editTimeout,
             editGateTimeout, editStrategy, editVpnDns, editMonitor, editSwitchTimeout,
@@ -66,6 +77,7 @@ public class SettingsActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         ScrollView scroll = new ScrollView(this);
+        pageScroll = scroll;
         scroll.setBackgroundColor(0xFF000000);
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -74,11 +86,25 @@ public class SettingsActivity extends Activity {
         setContentView(scroll);
         Ui.applyInsets(scroll);
 
+        // Разделы вместо одной длинной простыни: настроек стало слишком много, и найти
+        // в них «мосты» или «импорт пула» можно было только прокруткой.
+        HorizontalScrollView tabs = new HorizontalScrollView(this);
+        tabs.setHorizontalScrollBarEnabled(false);
+        tabBar = new LinearLayout(this);
+        tabBar.setOrientation(LinearLayout.HORIZONTAL);
+        tabBar.setPadding(0, 0, 0, dp(6));
+        tabs.addView(tabBar);
+        root.addView(tabs);
+        pageHost = new LinearLayout(this);
+        pageHost.setOrientation(LinearLayout.VERTICAL);
+        root.addView(pageHost);
+        newPage("Списки");
+
         // --- скорость ---
         section("Скорость");
         editMinSpeed = numberField(String.valueOf(Prefs.minSpeedKbit(this)));
         label("Порог «рабочего» конфига, кбит/с (32 по умолчанию = 4 КБ/с)");
-        root.addView(editMinSpeed);
+        add(editMinSpeed);
         note("Единицы: 1 КБ/с = 8 кбит/с. По умолчанию 32 кбит/с — это 4 КБ/с: конфиг "
                 + "засчитывается, если качает быстрее 4 КБ/с. Порог низкий намеренно: живой, "
                 + "но медленный конфиг лучше, чем пустой пул. На быстром Wi-Fi можно поднять "
@@ -86,15 +112,15 @@ public class SettingsActivity extends Activity {
 
         editLanes = numberField(String.valueOf(Prefs.speedLanes(this)));
         label("Сколько ядер мерить скорость одновременно (1–4, по умолчанию 4)");
-        root.addView(editLanes);
+        add(editLanes);
 
         editSpeedUrls = multiField(Prefs.join(Prefs.speedUrls(this)), 3);
         label("Файлы для замера скорости (по одному на строку)");
-        root.addView(editSpeedUrls);
+        add(editSpeedUrls);
 
         editGateTimeout = numberField(String.valueOf(Prefs.gateTimeoutMs(this)));
         label("Сколько ждём на один замер, мс (3000 по умолчанию)");
-        root.addView(editGateTimeout);
+        add(editGateTimeout);
 
         note("Замер идёт на маленьких файлах (32 и 128 КБ) и в несколько дорожек параллельно: "
                 + "канал видно по первым килобайтам, а ждать мегабайты незачем. Лимит — это окно "
@@ -108,18 +134,18 @@ public class SettingsActivity extends Activity {
         section("Поиск и пинг");
         editThreads = numberField(String.valueOf(Prefs.pingThreads(this)));
         label("Потоков пинга одновременно");
-        root.addView(editThreads);
+        add(editThreads);
         editTimeout = numberField(String.valueOf(Prefs.pingTimeoutMs(this)));
         label("Таймаут пинга, мс (2000 по умолчанию)");
-        root.addView(editTimeout);
+        add(editTimeout);
 
         editPingTargets = multiField(Prefs.join(Prefs.pingTargets(this)), 5);
         label("5 целей TCP-пинга «есть ли интернет» (host:port, по одной на строку)");
-        root.addView(editPingTargets);
+        add(editPingTargets);
 
         editHealthUrls = multiField(Prefs.join(Prefs.healthUrls(this)), 5);
         label("5 мест проверки канала через туннель (URL, по одному на строку)");
-        root.addView(editHealthUrls);
+        add(editHealthUrls);
 
         note("1000 мс — это фильтр «более-менее работающих»: то, что пингуется дольше, "
                 + "всё равно не годится для обхода. Пинг не решает «рабочий/не рабочий»: "
@@ -131,7 +157,7 @@ public class SettingsActivity extends Activity {
         // --- источники ---
         section("Источники списков (по одному на строку)");
         editSources = multiField(Prefs.join(Prefs.sources(this)), 7);
-        root.addView(editSources);
+        add(editSources);
         Button resetSources = smallButton("Вернуть источники по умолчанию");
         resetSources.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
@@ -139,7 +165,9 @@ public class SettingsActivity extends Activity {
                 toast("Применится после «Сохранить»");
             }
         });
-        root.addView(resetSources);
+        add(resetSources);
+
+        newPage("Обход");
 
         // --- DPI на линии ---
         section("DPI-обход");
@@ -147,14 +175,14 @@ public class SettingsActivity extends Activity {
                 Prefs.desyncLine(this));
         editStrategy = singleField(Prefs.dpiStrategy(this));
         label("Стратегия ciadpi (аргументы командной строки)");
-        root.addView(editStrategy);
+        add(editStrategy);
         Button recommended = smallButton("Вставить: " + Prefs.DEFAULT_STRATEGY);
         recommended.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 editStrategy.setText(Prefs.DEFAULT_STRATEGY);
             }
         });
-        root.addView(recommended);
+        add(recommended);
         note("Сначала всегда пробуется прямое подключение. Через ciadpi — только если оно "
                 + "не прошло (первые 3 конфига). TLS к серверу при этом фрагментируется, "
                 + "поэтому для Reality этот путь может не сработать.");
@@ -168,17 +196,36 @@ public class SettingsActivity extends Activity {
 
         editDpiSources = multiField(Prefs.join(Prefs.dpiSources(this)), 3);
         label("Откуда брать стратегии (по одной ссылке на строку)");
-        root.addView(editDpiSources);
+        add(editDpiSources);
+
+        // Рабочие стратегии: те, с которыми конфиги реально заработали (их же пробуем
+        // первыми при автоподборе). Хранятся отдельно от «текущей стратегии».
+        final java.util.List<String> working = DpiStrategies.working(this);
+        dpiOut = new TextView(this);
+        dpiOut.setTextColor(TEXT_DIM);
+        dpiOut.setTextSize(12);
+        dpiOut.setText(working.isEmpty()
+                ? "Рабочих стратегий пока нет: они появятся после первого удачного замера."
+                : "Рабочих стратегий: " + working.size() + " · последняя — "
+                        + DpiStrategies.shorten(working.get(0)));
+        add(dpiOut);
+
+        Button forgetStrategies = smallButton("Забыть рабочие стратегии");
+        forgetStrategies.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                DpiStrategies.clearWorking(SettingsActivity.this);
+                toast("Рабочие стратегии забыты");
+                recreate();
+            }
+        });
+        add(forgetStrategies);
 
         Button refreshDpi = smallButton("Обновить стратегии с GitHub");
         refreshDpi.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 savePrefs();
                 toast("Скачиваю списки стратегий…");
-                final TextView out = new TextView(SettingsActivity.this);
-                out.setTextColor(TEXT_DIM);
-                out.setTextSize(12);
-                root.addView(out);
+                final TextView out = dpiOut;
                 Thread t = new Thread(new Runnable() {
                     @Override public void run() {
                         ConfigRepository.clearCancel();
@@ -193,7 +240,7 @@ public class SettingsActivity extends Activity {
                         });
                         runOnUiThread(new Runnable() {
                             @Override public void run() {
-                                out.append("\nВсего стратегий: " + n);
+                                out.setText(sb.toString() + "\nВсего стратегий: " + n);
                                 toast("Стратегий сохранено: " + n);
                             }
                         });
@@ -203,16 +250,13 @@ public class SettingsActivity extends Activity {
                 t.start();
             }
         });
-        root.addView(refreshDpi);
+        add(refreshDpi);
 
         Button dpiProbe = smallButton("Проверить стратегии сейчас");
         dpiProbe.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 savePrefs();
-                final TextView out = new TextView(SettingsActivity.this);
-                out.setTextColor(TEXT_DIM);
-                out.setTextSize(12);
-                root.addView(out);
+                final TextView out = dpiOut;
                 toast("Проверяю стратегии…");
                 Thread t = new Thread(new Runnable() {
                     @Override public void run() {
@@ -239,7 +283,7 @@ public class SettingsActivity extends Activity {
                 t.start();
             }
         });
-        root.addView(dpiProbe);
+        add(dpiProbe);
 
         // --- ядро ---
         section("Ядро Xray");
@@ -257,16 +301,18 @@ public class SettingsActivity extends Activity {
         section("Сеть");
         editVpnDns = singleField(Prefs.vpnDns(this));
         label("DNS для туннеля");
-        root.addView(editVpnDns);
+        add(editVpnDns);
         swIpv6 = switchRow("Маршрутизировать IPv6", Prefs.ipv6(this));
         swAutoSwitch = switchRow("Переключать конфиг, если канал не отвечает", Prefs.autoSwitch(this));
         editMonitor = numberField(String.valueOf(Prefs.monitorIntervalSec(this)));
         label("Проверка канала каждые, сек");
-        root.addView(editMonitor);
+        add(editMonitor);
         editSwitchTimeout = numberField(String.valueOf(Prefs.switchTimeoutSec(this)));
         label("Секунд без ответа до переключения");
-        root.addView(editSwitchTimeout);
+        add(editSwitchTimeout);
         swBoot = switchRow("Подключаться при загрузке", Prefs.bootConnect(this));
+
+        newPage("Tor");
 
         // --- Tor ---
         section("Tor: мосты, резервный канал и списки");
@@ -278,22 +324,22 @@ public class SettingsActivity extends Activity {
                 Prefs.torFallback(this));
         editTorBridges = multiField(Prefs.torBridges(this), 4);
         label("Мосты (пусто — встроенные Vanilla)");
-        root.addView(editTorBridges);
+        add(editTorBridges);
         Button fillBridges = smallButton("Вставить встроенные Vanilla-мосты");
         fillBridges.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 editTorBridges.setText(readAssetFirstN("fallback/tor_bridges_vanilla.txt", 20));
             }
         });
-        root.addView(fillBridges);
+        add(fillBridges);
         editTorExtra = multiField(Prefs.torExtraTorrc(this), 2);
         label("Дополнительные строки torrc");
-        root.addView(editTorExtra);
+        add(editTorExtra);
 
         label("Лимит ожидания одного моста, секунд (5–120)");
         editTorBridgeWait = numberField(String.valueOf(Prefs.torBridgeWaitSec(this)));
         editTorBridgeWait.setInputType(InputType.TYPE_CLASS_NUMBER);
-        root.addView(editTorBridgeWait);
+        add(editTorBridgeWait);
         note("По умолчанию 10 секунд. Живой мост поднимается за секунды; если за лимит "
                 + "не поднялся — проверка идёт к следующему, а не висит на нём. "
                 + "Больше 30 с ставить смысла нет: это уже признак заблокированного моста.");
@@ -307,7 +353,7 @@ public class SettingsActivity extends Activity {
         torOut.setTextSize(12);
         String savedReport = Prefs.torReport(this);
         torOut.setText(savedReport.isEmpty() ? "Проверка ещё не запускалась." : savedReport);
-        root.addView(torOut);
+        add(torOut);
 
         Button checkTor = smallButton("Проверить мосты и источники через Tor");
         checkTor.setOnClickListener(new View.OnClickListener() {
@@ -338,7 +384,22 @@ public class SettingsActivity extends Activity {
                 t.start();
             }
         });
-        root.addView(checkTor);
+        add(checkTor);
+
+        Button browser = smallButton("Браузер (только Tor с мостами, поиск DuckDuckGo)");
+        browser.setTextColor(0xFFB388FF);
+        browser.setTextSize(15);
+        browser.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                savePrefs();
+                startActivity(new android.content.Intent(SettingsActivity.this, BrowserActivity.class));
+            }
+        });
+        add(browser);
+        note("Браузер — отдельный экран: одна вкладка, поиск через GET-формы, и ходит он "
+                + "только через Tor с мостами. Если мостов нет или VPN включён, он скажет об этом.");
+
+        newPage("Данные");
 
         // --- пул: импорт и экспорт ---
         section("Пул: импорт и экспорт");
@@ -351,7 +412,7 @@ public class SettingsActivity extends Activity {
         poolOut.setTextColor(TEXT_DIM);
         poolOut.setTextSize(12);
         poolOut.setText("В пуле " + Pool.count(this) + " конфигов.");
-        root.addView(poolOut);
+        add(poolOut);
         importLog = poolOut;
 
         Button exportPool = smallButton("Экспорт рабочих конфигов в .txt");
@@ -373,7 +434,7 @@ public class SettingsActivity extends Activity {
                 }
             }
         });
-        root.addView(exportPool);
+        add(exportPool);
 
         Button importPool = smallButton("Импорт .txt: дубликаты → пинг → скорость");
         importPool.setOnClickListener(new View.OnClickListener() {
@@ -388,7 +449,7 @@ public class SettingsActivity extends Activity {
                 }
             }
         });
-        root.addView(importPool);
+        add(importPool);
 
         // --- настройки файлом ---
         section("Настройки файлом: .json");
@@ -412,7 +473,7 @@ public class SettingsActivity extends Activity {
                 }
             }
         });
-        root.addView(exportSettings);
+        add(exportSettings);
 
         Button importSettings = smallButton("Импорт настроек из .json");
         importSettings.setOnClickListener(new View.OnClickListener() {
@@ -427,7 +488,7 @@ public class SettingsActivity extends Activity {
                 }
             }
         });
-        root.addView(importSettings);
+        add(importSettings);
 
         // --- наборы настроек: выбираются из списка, импортированные добавляются сюда же ---
         section("Наборы настроек");
@@ -444,13 +505,13 @@ public class SettingsActivity extends Activity {
 
         presetSpinner = new Spinner(this);
         presetSpinner.setAdapter(presetAdapter);
-        root.addView(presetSpinner);
+        add(presetSpinner);
 
         presetNote = new TextView(this);
         presetNote.setTextColor(TEXT_DIM);
         presetNote.setTextSize(12);
         presetNote.setPadding(0, dp(6), 0, dp(6));
-        root.addView(presetNote);
+        add(presetNote);
         presetSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int pos, long id) {
                 showPresetNote(pos);
@@ -477,7 +538,7 @@ public class SettingsActivity extends Activity {
                 recreate();
             }
         });
-        root.addView(applyPreset);
+        add(applyPreset);
 
         Button deletePreset = smallButton("Удалить выбранный набор (только свой из .json)");
         deletePreset.setOnClickListener(new View.OnClickListener() {
@@ -497,7 +558,7 @@ public class SettingsActivity extends Activity {
                 recreate();
             }
         });
-        root.addView(deletePreset);
+        add(deletePreset);
 
         Button saveConsole = smallButton("Сохранить консоль в .json");
         saveConsole.setOnClickListener(new View.OnClickListener() {
@@ -514,7 +575,7 @@ public class SettingsActivity extends Activity {
                 }
             }
         });
-        root.addView(saveConsole);
+        add(saveConsole);
         note("Консоль — это лог с главного экрана: пинг, замер, причины отказов, мосты. "
                 + "Файл содержит строки и склеенный текст, версию приложения и число конфигов "
                 + "в пуле.");
@@ -522,6 +583,31 @@ public class SettingsActivity extends Activity {
         // --- данные ---
         section("Данные");
         swEmbedded = switchRow("Встроенный резерв конфигов", Prefs.embeddedEnabled(this));
+        // Чёрный список: конфиги, которые уже проверяли и они не работали. Их не пингуем
+        // неделю — иначе каждый сбор пула заново тратит время на одно и то же.
+        final int blacklisted = Blacklist.size(this);
+        final TextView blackOut = new TextView(this);
+        blackOut.setTextColor(TEXT_DIM);
+        blackOut.setTextSize(12);
+        blackOut.setText(blacklisted == 0
+                ? "Нерабочих конфигов в списке нет."
+                : "Нерабочих конфигов в списке: " + blacklisted
+                        + ". Они не пингуются и не меряются; запись живёт "
+                        + (Blacklist.TTL_MS / (24 * 3600 * 1000)) + " дней.");
+        add(blackOut);
+
+        Button clearBlacklist = smallButton("Очистить список нерабочих конфигураций");
+        clearBlacklist.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                int n = Blacklist.size(SettingsActivity.this);
+                Blacklist.clear(SettingsActivity.this);
+                blackOut.setText("Список очищен (было " + n + "). Следующий сбор пула "
+                        + "перепроверит всё заново.");
+                toast("Список нерабочих конфигураций очищен");
+            }
+        });
+        add(clearBlacklist);
+
         Button clearAll = smallButton("Удалить скачанные списки и пул");
         clearAll.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
@@ -530,7 +616,7 @@ public class SettingsActivity extends Activity {
                 toast("Скачанные списки и пул удалены (встроенный резерв остался)");
             }
         });
-        root.addView(clearAll);
+        add(clearAll);
 
         Button battery = smallButton("Разрешить работу в фоне (без выгрузки)");
         battery.setOnClickListener(new View.OnClickListener() {
@@ -538,39 +624,87 @@ public class SettingsActivity extends Activity {
                 PermissionsHelper.requestBatteryExemption(SettingsActivity.this);
             }
         });
-        root.addView(battery);
+        add(battery);
 
-        Button save = smallButton("Сохранить");
-        save.setTextColor(0xFF3DDC84);
-        save.setTextSize(16);
-        save.setOnClickListener(new View.OnClickListener() {
+        // --- инфо: о проекте, донат, идеи ---
+        newPage("Инфо");
+        section("О проекте");
+        note("«Обход Белых Списков» — открытый проект. У него нет ни автора, ни владельца: "
+                + "код под GPL-3.0, и любой может взять его, форкнуть, переписать или "
+                + "выпустить своими руками. Приложение ничего не обещает и не продаёт: "
+                + "ядра Xray, ByeDPI и Tor работают локально, серверов у проекта нет, "
+                + "аккаунтов нет, телеметрии нет.");
+        note("Пул и черновик метаданных подготовлены так, чтобы приложение можно было "
+                + "публиковать в F-Droid: сборка на Gradle, нативные библиотеки собираются "
+                + "из исходников, ни одного предсобранного бинарника в репозитории.");
+
+        section("Донат");
+        note("Поддержка — только деньгами и только на инфраструктуру (домены, тестовые "
+                + "серверы, железо для проверок). Ничего взамен не обещается: приложение "
+                + "останется бесплатным и без рекламы.");
+        final String donate = "UQBYs3wqrpoUsGoU2edVR7z6_1ctSH4HU2ZZf5DXPToQ3wgi";
+        final TextView donateView = new TextView(this);
+        donateView.setText(donate);
+        donateView.setTextColor(0xFFB388FF);
+        donateView.setTextSize(12);
+        donateView.setTextIsSelectable(true);
+        donateView.setPadding(dp(4), dp(4), dp(4), dp(8));
+        add(donateView);
+        Button copyDonate = smallButton("Скопировать адрес доната");
+        copyDonate.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                savePrefs();
-                toast("Сохранено");
-                finish();
+                android.content.ClipboardManager cb = (android.content.ClipboardManager)
+                        getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                if (cb != null) {
+                    cb.setPrimaryClip(android.content.ClipData.newPlainText("USDT (TON)", donate));
+                    toast("Адрес скопирован");
+                }
             }
         });
-        root.addView(save);
+        add(copyDonate);
+        note("USDT (jetton в сети TON). Проверяйте адрес при копировании: это единственный.");
 
-        Button browser = smallButton("Браузер (только Tor с мостами, поиск DuckDuckGo)");
-        browser.setTextColor(0xFFB388FF);
-        browser.setTextSize(15);
-        browser.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                savePrefs();
-                startActivity(new android.content.Intent(SettingsActivity.this, BrowserActivity.class));
-            }
-        });
-        root.addView(browser);
+        section("Проекты, которым нужна поддержка");
+        note("1. Медленный канал до внешнего интернета, который стабильно работает при белых "
+                + "списках, бесплатный для всех пользователей рунета — и приложение для его "
+                + "эффективного использования. Это ровно то, чего не хватает этому приложению: "
+                + "список конфигов ищет выход, но сам выход никому не принадлежит.");
+        note("2. Под чебурнет пригодятся системы ретрансляции в ру-сеть, коротковолновое радио, "
+                + "просто радио, старлинки с границы, спутниковые зарубежные каналы. Всё это — "
+                + "каналы с маленькой пропускной способностью, но с недоступной цензуре физикой.");
+        note("3. Под чебурнет при белых списках — повсеместный Meshtastic (LoRa-меш) или "
+                + "аналогичная сеть плюс ключевая технология: отправить сообщение LLM, которая "
+                + "может просмотреть внешнюю сеть и прислать ответ коротким текстом. Узкий канал "
+                + "и текстовый ответ сочетаются идеально: меш даёт связь без оператора, а LLM — "
+                + "сжатый смысл вместо мегабайт.");
+        note("Эти идеи открыты: если делать — то в открытом виде и без владельца, как и это "
+                + "приложение.");
+
+        // Сохранение — на каждой странице: иначе после правки настроек приходилось бы
+        // возвращаться на вкладку «Инфо».
+        for (LinearLayout page : pageViews) {
+            Button save = smallButton("Сохранить");
+            save.setTextColor(0xFF3DDC84);
+            save.setTextSize(16);
+            save.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    savePrefs();
+                    toast("Сохранено");
+                    finish();
+                }
+            });
+            page.addView(save);
+        }
 
         TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.1.6\n"
+        footer.setText("Обход Белых Списков 0.1.7\n"
                 + versionLine() + "\n"
+                + "Открытый проект без разработчика: код под GPL-3.0, форкайте и переписывайте.\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");
         footer.setTextColor(TEXT_DIM);
         footer.setTextSize(11);
         footer.setPadding(0, dp(24), 0, 0);
-        root.addView(footer);
+        add(footer);
     }
 
     @Override
@@ -741,6 +875,57 @@ public class SettingsActivity extends Activity {
         e.apply();
     }
 
+    // ------------------------------------------------------------------ страницы/вкладки
+
+    /** Начать новую страницу: дальше всё содержимое уходит в неё. */
+    private void newPage(String title) {
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setVisibility(pageViews.isEmpty() ? View.VISIBLE : View.GONE);
+        pageViews.add(page);
+        pageHost.addView(page);
+        pageBox = page;
+
+        final int index = pageViews.size() - 1;
+        Button tab = new Button(this);
+        tab.setText(title);
+        tab.setAllCaps(false);
+        tab.setTextSize(12);
+        tab.setBackgroundResource(R.drawable.bg_button);
+        tab.setTextColor(index == 0 ? 0xFF3DDC84 : TEXT_DIM);
+        tab.setPadding(dp(14), dp(6), dp(14), dp(6));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, 0, dp(6), 0);
+        tab.setLayoutParams(lp);
+        tab.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                selectPage(index);
+            }
+        });
+        tabBar.addView(tab);
+        pageTabs.add(tab);
+    }
+
+    /** Показать страницу по номеру (остальные прячем). */
+    private void selectPage(int index) {
+        if (index < 0 || index >= pageViews.size()) return;
+        currentPage = index;
+        for (int i = 0; i < pageViews.size(); i++) {
+            boolean on = i == index;
+            pageViews.get(i).setVisibility(on ? View.VISIBLE : View.GONE);
+            if (i < pageTabs.size()) {
+                pageTabs.get(i).setTextColor(on ? 0xFF3DDC84 : TEXT_DIM);
+            }
+        }
+        if (pageScroll != null) pageScroll.scrollTo(0, 0);
+    }
+
+    /** Добавить view в текущую страницу (или в корень, пока страниц нет). */
+    private void add(View v) {
+        (pageBox != null ? pageBox : root).addView(v);
+    }
+
     // ------------------------------------------------------------------ строительные блоки
 
     private void section(String text) {
@@ -750,7 +935,7 @@ public class SettingsActivity extends Activity {
         tv.setTextSize(12);
         tv.setAllCaps(true);
         tv.setPadding(0, dp(18), 0, dp(6));
-        root.addView(tv);
+        add(tv);
     }
 
     private void label(String text) {
@@ -759,7 +944,7 @@ public class SettingsActivity extends Activity {
         tv.setTextColor(TEXT_DIM);
         tv.setTextSize(11);
         tv.setPadding(0, dp(2), 0, dp(10));
-        root.addView(tv);
+        add(tv);
     }
 
     private void note(String text) {
@@ -768,7 +953,7 @@ public class SettingsActivity extends Activity {
         tv.setTextColor(TEXT_DIM);
         tv.setTextSize(11);
         tv.setPadding(dp(4), 0, dp(4), dp(6));
-        root.addView(tv);
+        add(tv);
     }
 
     private EditText baseField() {
@@ -820,7 +1005,7 @@ public class SettingsActivity extends Activity {
         Switch sw = new Switch(this);
         sw.setChecked(checked);
         row.addView(sw);
-        root.addView(row);
+        add(row);
         return sw;
     }
 

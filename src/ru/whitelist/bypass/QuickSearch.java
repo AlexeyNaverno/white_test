@@ -4,6 +4,7 @@ import android.content.Context;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,6 +37,12 @@ public final class QuickSearch {
     public static final int PING_BATCH = 150;
     /** Потолок реальных проверок за круг; остальных ЖИВЫХ переносим в следующий круг. */
     public static final int PROBES_PER_ROUND = 25;
+    /**
+     * Порция пинга. Раньше пинговалась вся партия (150) и только потом что-то проверялось:
+     * это лишние десятки секунд. Теперь пинг идёт порциями, и как только в порции нашлось
+     * живое — сразу проверяется скорость, а пинг продолжается только если рабочего нет.
+     */
+    public static final int PING_CHUNK = 25;
     /**
      * Сколько конфигов из пула разрешено проверить в самом конце, когда новых не осталось.
      * Пул обычно и есть ответ: конфиги там уже замерены, берём самые быстрые.
@@ -112,6 +119,12 @@ public final class QuickSearch {
         final boolean relay = Prefs.allowNoTls(c);
         final Map<String, Integer> rejects = new LinkedHashMap<>();
         queue = Probe.usable(queue, rejects, relay);
+        int beforeBlacklist = queue.size();
+        queue = Blacklist.filter(c, queue);
+        if (beforeBlacklist > queue.size()) {
+            log.line("Чёрный список: " + (beforeBlacklist - queue.size())
+                    + " нерабочих — не пингую (очистить: настройки → «Данные»)");
+        }
         if (!rejects.isEmpty()) {
             log.line(Probe.rejectsText(rejects) + " — пропускаю");
         }
@@ -220,48 +233,74 @@ public final class QuickSearch {
             }
 
             round++;
-            log.line("Круг " + round + ": пингую " + batch.size() + " конфигов…");
-            ConfigTester.Outcome outcome = ConfigTester.test(batch, threads, pingTimeout,
-                    new ConfigTester.Listener() {
-                        @Override public void onProgress(int done, int total, int ok, int failed) {
-                            if (done % 25 == 0 || done == total) {
-                                log.line("  пинг " + done + "/" + total
-                                        + " → живых " + ok + ", мёртвых " + failed);
-                            }
-                        }
-                    });
-            if (outcome.cancelled) {
+            final int total = batch.size();
+            log.line("Круг " + round + ": " + total + " конфигов, пинг по " + PING_CHUNK
+                    + " — пинг → есть живой → сразу скорость → дальше пинг");
+            List<ProxyConfig> alive = new ArrayList<>();
+            int probes = 0;
+            boolean cancelled = false;
+            for (int off = 0; off < total; off += PING_CHUNK) {
+                if (ConfigRepository.isCancelled()) {
+                    cancelled = true;
+                    break;
+                }
+                List<ProxyConfig> chunk = new ArrayList<>(
+                        batch.subList(off, Math.min(total, off + PING_CHUNK)));
+                chunk = Blacklist.filter(c, chunk);   // нерабочие — даже не пингуем
+                if (chunk.isEmpty()) continue;
+
+                ConfigTester.Outcome outcome = ConfigTester.test(chunk, threads, pingTimeout, null);
+                if (outcome.cancelled) {
+                    cancelled = true;
+                    break;
+                }
+                log.line("  пинг " + Math.min(total, off + PING_CHUNK) + "/" + total
+                        + ": " + outcome.summary());
+                if (outcome.alive.isEmpty()) continue;
+
+                sortByLatency(outcome.alive);
+                alive.addAll(outcome.alive);
+                log.line("  живых накопилось " + alive.size() + " — проверяю скорость");
+
+                // Как только пинг дал живое, проверяем его — и только потом пингуем дальше.
+                for (int i = 0; i < alive.size(); i++) {
+                    if (ConfigRepository.isCancelled()) {
+                        cancelled = true;
+                        break;
+                    }
+                    if (probes >= PROBES_PER_ROUND) break;
+                    ProxyConfig cfg = alive.get(i);
+                    probes++;
+                    log.line("  проверка " + probes + "/" + PROBES_PER_ROUND + ": "
+                            + truncate(cfg.name, 45) + " · " + cfg.latency + " мс");
+                    Probe.Result r = Probe.measureConfig(c, cfg, gateTimeout);
+                    if (r.ok && r.kbps >= min) {
+                        log.line("  → " + r.text());
+                        Blacklist.forget(c, cfg.raw);
+                        return new Found(cfg, r.kbps);
+                    }
+                    String why = r.ok
+                            ? Prefs.speedText(r.kbps) + " — ниже порога " + minText
+                            : r.reason;
+                    log.line("  → не прошёл · " + why);
+                    if (r.hard) Blacklist.add(c, cfg, r.reason);
+                    alive.remove(i);
+                    i--;
+                }
+                if (cancelled) break;
+                if (probes >= PROBES_PER_ROUND) {
+                    log.line("Лимит проверок за круг (" + PROBES_PER_ROUND
+                            + ") — остальное в следующем круге");
+                    break;
+                }
+            }
+            if (cancelled) {
                 log.line("Поиск остановлен");
                 return null;
             }
-            log.line("Круг " + round + ": " + outcome.summary());
-            if (outcome.alive.isEmpty()) continue;
-
-            StringBuilder aliveLine = new StringBuilder("Живые: ");
-            for (int i = 0; i < Math.min(SHOW_ALIVE, outcome.alive.size()); i++) {
-                ProxyConfig a = outcome.alive.get(i);
-                if (i > 0) aliveLine.append(" · ");
-                aliveLine.append(truncate(a.name, 22)).append(' ').append(a.latency).append(" мс");
-            }
-            if (outcome.alive.size() > SHOW_ALIVE) {
-                aliveLine.append(" · ещё ").append(outcome.alive.size() - SHOW_ALIVE);
-            }
-            log.line(aliveLine.toString());
-
-            int probes = Math.min(outcome.alive.size(), PROBES_PER_ROUND);
-            if (outcome.alive.size() > probes) {
-                // не теряем уже пропингованное — вернёмся к нему в следующем круге
-                carry.addAll(outcome.alive.subList(probes, outcome.alive.size()));
-                log.line("Живых " + outcome.alive.size() + ", за круг проверяю " + probes
-                        + ", остальные " + carry.size() + " — в следующем круге");
-            }
-            log.line("Проверяю до первого рабочего (порог " + minText + "): " + probes);
-            Found hit = probeList(c, outcome.alive.subList(0, probes), log, min, minText,
-                    gateTimeout, probes);
-            if (hit != null) return hit;
-            if (ConfigRepository.isCancelled()) {
-                log.line("Поиск остановлен");
-                return null;
+            if (!alive.isEmpty()) {
+                carry.addAll(alive);
+                log.line("Живых не проверено: " + alive.size() + " — вернусь к ним в следующем круге");
             }
             log.line("Круг " + round + " без результата — дальше");
         }
@@ -302,8 +341,19 @@ public final class QuickSearch {
                     ? Prefs.speedText(r.kbps) + " — ниже порога " + minText
                     : r.reason;
             log.line("  → не прошёл · " + why);
+            if (r.hard && !r.ok) Blacklist.add(c, cfg, r.reason);
         }
         return null;
+    }
+
+    /** Живые — по пингу: сначала ближайшие. */
+    private static void sortByLatency(List<ProxyConfig> list) {
+        Collections.sort(list, new Comparator<ProxyConfig>() {
+            @Override public int compare(ProxyConfig a, ProxyConfig b) {
+                return Long.compare(a.latency < 0 ? Long.MAX_VALUE : a.latency,
+                        b.latency < 0 ? Long.MAX_VALUE : b.latency);
+            }
+        });
     }
 
     /** Скачать источник и добавить новое. -1 — источник не отдался. */
