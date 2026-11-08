@@ -1,0 +1,4 @@
+• Help for every single item: an "i" button next to every setting, switch and action explains what it does, which values are allowed and why the extremes are bad.
+• Knowledge base: docs/KNOWLEDGE.txt now also ships inside the app (Settings → Info) — details on every feature, data formats, all setting keys and how to read the log. Export to .txt is there too.
+• A ready kit for tuning with an LLM: export settings + knowledge base → edit → import back.
+• README rewritten: badges, a pipeline diagram from list to tunnel, screenshots, tables.
