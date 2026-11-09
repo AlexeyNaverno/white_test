@@ -1,0 +1,4 @@
+• Dead configs now leave the pool by themselves: if a config comes up neither directly nor through the DPI bypass, it is removed from the working pool and blacklisted for a week. The monitor does the same when the channel dies and another server takes over.
+• Connecting repeats how the config got into the pool: one measured through the bypass is tried with exactly the same strategy, one measured directly is tried directly first. There is always a single second attempt.
+• The notification gained a Pause button: the tunnel is torn down, traffic goes directly from the host, the config stays selected. The button turns into Resume.
+• Default config sources and Tor bridges refreshed; the built-in bridge parser was fixed (fingerprints are no longer dropped). DPI strategies were left untouched.

@@ -33,6 +33,14 @@ public class BypassVpnService extends VpnService {
     public static final String ACTION_STOP = "ru.whitelist.bypass.action.STOP";
     /** Кнопка в уведомлении: сменить конфиг, не отключая туннель. */
     public static final String ACTION_SWITCH = "ru.whitelist.bypass.action.SWITCH";
+    /**
+     * Кнопка в уведомлении: пауза. Туннель снимается целиком, трафик идёт с хоста
+     * напрямую — это именно «на минуту», а не «выключить»: ядро остаётся поднятым,
+     * и продолжение не требует новой проверки конфига.
+     */
+    public static final String ACTION_PAUSE = "ru.whitelist.bypass.action.PAUSE";
+    /** Кнопка в уведомлении: продолжить с того же конфига (или поднять заново). */
+    public static final String ACTION_RESUME = "ru.whitelist.bypass.action.RESUME";
     public static final String ACTION_STATUS = "ru.whitelist.bypass.action.STATUS";
     public static final String EXTRA_STATE = "state";    // off | connecting | on | error
     public static final String EXTRA_DETAIL = "detail";
@@ -49,8 +57,6 @@ public class BypassVpnService extends VpnService {
     private static final int XRAY_PORT = 10811;
     /** Сколько конфигов из пула пробуем за одно подключение. */
     private static final int MAX_ATTEMPTS = 6;
-    /** Для скольких первых конфигов пробуем DPI-обход линии. */
-    private static final int DESYNC_ATTEMPTS = 3;
     /** Допуск при повторной проверке скорости: 80% от порога (сеть «дышит»). */
     private static final double MIN_SPEED_TOLERANCE = 0.8;
     /** Сколько конфигов проверяем «вживую» при быстром поиске. */
@@ -63,6 +69,8 @@ public class BypassVpnService extends VpnService {
     private static volatile String currentDetail = "";
     /** Автоподбор стратегии DPI делаем один раз за подключение, а не на каждую попытку. */
     private boolean dpiAutotuned = false;
+    /** Пауза: TUN снят, трафик идёт напрямую, ядро при этом живо. */
+    private static volatile boolean paused = false;
     private static volatile int currentSocksPort = -1;
     /** Туннель поднят через Tor-мосты (резервный режим), а не через конфиг из пула. */
     private volatile boolean torMode = false;
@@ -76,6 +84,8 @@ public class BypassVpnService extends VpnService {
     public static boolean isTorMode() { return MODE_TOR.equals(currentMode); }
     /** Идёт попытка подключения (сервис занят поиском/проверкой). */
     public static boolean isConnecting() { return connectingFlag; }
+    /** Туннель на паузе: VPN снят, трафик идёт напрямую. */
+    public static boolean isPaused() { return paused; }
     public static String currentDetail() { return currentDetail; }
     public static int currentSocksPort() { return currentSocksPort; }
 
@@ -119,15 +129,27 @@ public class BypassVpnService extends VpnService {
         }
         if (ACTION_SWITCH.equals(action)) {
             if (running.get()) {
-                sendStatus("connecting", "Переключаю конфиг…");
-                Thread switcher = new Thread(new Runnable() {
-                    @Override public void run() { switchToNext(); }
-                }, "bypass-switch");
-                switcher.setDaemon(true);
-                switcher.start();
+                if (paused) {
+                    sendStatus("paused", "Пауза · трафик идёт напрямую");
+                } else {
+                    sendStatus("connecting", "Переключаю конфиг…");
+                    Thread switcher = new Thread(new Runnable() {
+                        @Override public void run() { switchToNext(false); }
+                    }, "bypass-switch");
+                    switcher.setDaemon(true);
+                    switcher.start();
+                }
             } else {
                 sendStatus("off", "Туннель не запущен");
             }
+            return START_NOT_STICKY;
+        }
+        if (ACTION_PAUSE.equals(action)) {
+            pauseTunnel();
+            return START_NOT_STICKY;
+        }
+        if (ACTION_RESUME.equals(action)) {
+            resumeTunnel();
             return START_NOT_STICKY;
         }
         if (ACTION_START.equals(action)) {
@@ -154,10 +176,10 @@ public class BypassVpnService extends VpnService {
 
     private void startWorker() {
         try {
-            List<ProxyConfig> candidates = connectCandidates(MAX_ATTEMPTS);
+            List<Pool.Entry> candidates = connectCandidates(MAX_ATTEMPTS);
             if (candidates.isEmpty()) {
                 sendStatus("connecting", "Пул пуст — ищу первый рабочий конфиг…");
-                candidates = quickFind();
+                candidates = entriesOf(quickFind());
             }
             if (candidates.isEmpty()) {
                 if (tryTorFallback("Рабочих конфигов нет")) return;
@@ -167,20 +189,45 @@ public class BypassVpnService extends VpnService {
 
             boolean up = false;
             int attempt = 0;
-            for (ProxyConfig cfg : candidates) {
+            int total = candidates.size();
+            for (Pool.Entry entry : candidates) {
                 if (stopRequested.get() || ConfigRepository.isCancelled()) {
                     fail("Остановлено пользователем");
                     return;
                 }
+                ProxyConfig cfg = entry.cfg();
+                if (cfg == null) {
+                    Pool.remove(this, entry.raw);   // строка пула битая — ей там не место
+                    continue;
+                }
                 attempt++;
                 currentConfig = cfg;
-                sendStatus("connecting", "Попытка " + attempt + "/" + candidates.size()
-                        + ": " + truncate(cfg.name, 42));
-                if (activate(cfg, false)) { up = true; break; }
-                if (Prefs.desyncLine(this) && attempt <= DESYNC_ATTEMPTS) {
-                    sendStatus("connecting", "Попытка " + attempt + " через DPI-обход линии…");
-                    if (activate(cfg, true)) { up = true; break; }
+                // Порядок повторяет то, как конфиг попал в пул. Замерен через DPI-обход —
+                // сначала пробуем РОВНО ту стратегию, что дала канал; замерен напрямую —
+                // сначала напрямую. Вторая попытка всегда одна и «другая».
+                if (!entry.dpi.isEmpty()) {
+                    sendStatus("connecting", "Попытка " + attempt + "/" + total
+                            + " через DPI-обход (как при замере): " + truncate(cfg.name, 34));
+                    up = activate(cfg, entry.dpi);
+                    if (!up) {
+                        sendStatus("connecting", "Попытка " + attempt + "/" + total
+                                + " напрямую: " + truncate(cfg.name, 34));
+                        up = activate(cfg, null);
+                    }
+                } else {
+                    sendStatus("connecting", "Попытка " + attempt + "/" + total
+                            + ": " + truncate(cfg.name, 40));
+                    up = activate(cfg, null);
+                    if (!up && Prefs.desyncLine(this)) {
+                        sendStatus("connecting", "Попытка " + attempt + "/" + total
+                                + " с DPI-обходом (один раз): " + truncate(cfg.name, 30));
+                        up = activate(cfg, Prefs.dpiStrategy(this));
+                    }
                 }
+                if (up) break;
+                // Ни напрямую, ни с обходом — значит он больше не рабочий:
+                // в урну (из пула) и в чёрный список, чтобы неделю его не трогать.
+                discard(cfg, lastError);
             }
             if (!up) {
                 String why = ("Не удалось подключиться ни к одному из " + attempt
@@ -323,15 +370,46 @@ public class BypassVpnService extends VpnService {
         tun = null;
     }
 
-    /** Кандидаты из пула: сверху самые быстрые. */
-    private List<ProxyConfig> connectCandidates(int max) {
-        List<ProxyConfig> out = new ArrayList<>();
+    /** Кандидаты из пула: сверху самые быстрые, вместе со стратегией DPI-обхода. */
+    private List<Pool.Entry> connectCandidates(int max) {
+        List<Pool.Entry> out = new ArrayList<>();
         for (Pool.Entry e : Pool.load(this)) {
             if (out.size() >= max) break;
-            ProxyConfig c = e.cfg();
-            if (c != null) out.add(c);
+            if (e.cfg() != null) out.add(e);
         }
         return out;
+    }
+
+    /** Найденные «быстрым поиском» конфиги — в вид записей пула (стратегии пока нет). */
+    private static List<Pool.Entry> entriesOf(List<ProxyConfig> list) {
+        List<Pool.Entry> out = new ArrayList<>();
+        for (ProxyConfig c : list) {
+            if (c != null) out.add(new Pool.Entry(c.raw, 1, c.latency, System.currentTimeMillis()));
+        }
+        return out;
+    }
+
+    /**
+     * Конфиг не поднялся ни напрямую, ни с DPI-обходом: убираем его из пула («в урну»)
+     * и ставим в чёрный список. Держать в рабочих то, что не подключается, бессмысленно —
+     * оно занимает попытку у каждого следующего подключения.
+     */
+    private void discard(ProxyConfig cfg, String why) {
+        if (cfg == null) return;
+        boolean removed = Pool.remove(this, cfg.raw);
+        // Конфиг, который ядро не примет в принципе (нет TLS, а ретранслятор выключен),
+        // из пула убираем — он занимает попытку, — но в чёрный список не пишем: это
+        // ограничение настроек, а не мёртвый сервер.
+        if (XrayEngine.compatProblem(cfg, Prefs.allowNoTls(this)) != null) {
+            Log.i(TAG, "конфиг несовместим с ядром при текущих настройках: " + cfg.name);
+            return;
+        }
+        Blacklist.add(this, cfg, why);
+        String text = "Убран из рабочих" + (removed ? "" : " (его там уже не было)")
+                + " и в чёрный список: " + truncate(cfg.name, 30)
+                + (why == null || why.isEmpty() ? "" : " · " + why);
+        Log.i(TAG, text);
+        sendStatus("connecting", text);
     }
 
     /**
@@ -385,15 +463,19 @@ public class BypassVpnService extends VpnService {
 
     /**
      * Поднять конфиг на локальном порту 10811 и проверить скорость.
-     * withDesync — линия до сервера идёт через локальный ciadpi (DPI-обход).
+     *
+     * @param dpiStrategy стратегия ciadpi для линии до сервера; null/"" — напрямую.
+     *                    Если конфиг был замерен через обход, сюда передаётся ровно та
+     *                    стратегия, что дала канал, — иначе обход подбирается заново.
      */
-    private boolean activate(ProxyConfig cfg, boolean withDesync) {
+    private boolean activate(ProxyConfig cfg, String dpiStrategy) {
+        boolean withDesync = dpiStrategy != null && !dpiStrategy.trim().isEmpty();
         int desyncPort = 0;
         boolean ok = false;
         try {
             if (!withDesync) stopDesync();
             if (withDesync) {
-                desyncPort = startDesync(cfg);
+                desyncPort = startDesync(cfg, dpiStrategy);
                 if (desyncPort <= 0) {
                     lastError = "DPI-обход линии не поднялся";
                     return false;
@@ -429,7 +511,9 @@ public class BypassVpnService extends VpnService {
                 return false;
             }
             Prefs.setCurrentConfig(this, cfg.raw, cfg.name, cfg.host, cfg.port);
-            Pool.remember(this, cfg.raw, kbps, cfg.latency);
+            // Стратегию записываем ту, с которой реально поднялось: иначе следующее
+            // подключение начнёт «с чистого листа» и потеряет рабочий рецепт.
+            Pool.remember(this, cfg.raw, kbps, cfg.latency, withDesync ? dpiStrategy.trim() : "");
             currentConfig = cfg;
             currentSocksPort = XRAY_PORT;
             currentDetail = cfg.name + " · " + kbps + " КБ/с";
@@ -449,25 +533,24 @@ public class BypassVpnService extends VpnService {
             if (!ok && desyncPort > 0) stopDesync();
             if (ok && cfg != null) {
                 Blacklist.forget(this, cfg.raw);
-                if (desyncPort > 0) {
-                    DpiStrategies.rememberWorking(this, Pool.dpiFor(this, cfg.raw).isEmpty()
-                            ? Prefs.dpiStrategy(this) : Pool.dpiFor(this, cfg.raw));
-                }
+                if (desyncPort > 0) DpiStrategies.rememberWorking(this, dpiStrategy.trim());
             }
         }
     }
 
     /** Локальный ciadpi, через который идёт линия до VPN-сервера. 0 — не поднялся. */
-    private int startDesync(ProxyConfig cfg) {
+    private int startDesync(ProxyConfig cfg, String dpiStrategy) {
         stopDesync();
         try {
             String sni = cfg != null ? cfg.tlsServerName() : null;
             if (sni == null || sni.isEmpty()) {
                 sni = (cfg != null && cfg.host != null && !cfg.host.isEmpty()) ? cfg.host : "www.youtube.com";
             }
-            // Один раз за сессию: если разрешено, ищем стратегию, которая реально пробивает
-            // блокировки у текущего провайдера, и подставляем её вместо сохранённой вручную.
-            if (Prefs.dpiAutotune(this) && !dpiAutotuned) {
+            String use = dpiStrategy == null ? "" : dpiStrategy.trim();
+            if (use.isEmpty()) use = Prefs.dpiStrategy(this);
+            // Автоподбор — один раз за сессию и только для «стратегии из настроек»:
+            // если пришла стратегия из пула, она уже доказала, что пробивает блокировку.
+            if (Prefs.dpiAutotune(this) && !dpiAutotuned && use.equals(Prefs.dpiStrategy(this))) {
                 dpiAutotuned = true;
                 sendStatus("connecting", "Подбираю стратегию обхода DPI…");
                 Log.i(TAG, "DPI: автоподбор, стартовая — " + DpiStrategies.shorten(Prefs.dpiStrategy(this)));
@@ -479,17 +562,12 @@ public class BypassVpnService extends VpnService {
                 });
                 Log.i(TAG, "DPI: выбрана " + DpiStrategies.shorten(chosen));
                 sendStatus("connecting", "Стратегия обхода: " + DpiStrategies.shorten(chosen));
+                if (chosen != null && !chosen.trim().isEmpty()) use = chosen.trim();
             }
             int port = Probe.freePort();
             if (port <= 0) return 0;
-            // Если этот конфиг в пуле замерен через DPI-обход, берём ровно ту стратегию:
-            // именно она дала рабочий канал, а не «текущая из настроек».
-            String saved = cfg != null ? Pool.dpiFor(this, cfg.raw) : "";
-            String strategy = saved.isEmpty() ? Prefs.dpiStrategy(this) : saved;
-            if (!saved.isEmpty()) {
-                Log.i(TAG, "DPI: стратегия из пула — " + DpiStrategies.shorten(saved));
-            }
-            String[] args = DpiArgs.build(strategy, port, sni);
+            Log.i(TAG, "DPI: стратегия — " + DpiStrategies.shorten(use));
+            String[] args = DpiArgs.build(use, port, sni);
             ByeDpiProxy proxy = new ByeDpiProxy();
             desyncProxy = proxy;
             Thread t = new Thread(new Runnable() {
@@ -622,7 +700,7 @@ public class BypassVpnService extends VpnService {
                     Log.w(TAG, "канал не отвечает: " + fails + "/" + maxFail);
                     if (fails >= maxFail && Prefs.autoSwitch(BypassVpnService.this)) {
                         fails = 0;
-                        switchToNext();
+                        switchToNext(true);
                     }
                 }
             }
@@ -646,18 +724,35 @@ public class BypassVpnService extends VpnService {
     }
 
     /** Переключение на следующий по скорости конфиг из пула. TUN и hev не перезапускаем. */
-    private void switchToNext() {
-        List<ProxyConfig> list = connectCandidates(6);
-        String currentRaw = currentConfig != null ? currentConfig.raw : "";
+    /**
+     * @param blameCurrent true — вызвано монитором: текущий конфиг перестал отвечать.
+     *                     Тогда после удачного переключения он уходит из пула и в чёрный
+     *                     список. Если же не поднялся никто, виновата сеть, а не конфиг —
+     *                     никого не трогаем.
+     */
+    private void switchToNext(boolean blameCurrent) {
+        ProxyConfig previous = currentConfig;
+        List<Pool.Entry> list = connectCandidates(6);
+        String currentRaw = previous != null ? previous.raw : "";
         boolean wasTor = torMode;
         int tried = 0;
-        for (ProxyConfig cfg : list) {
+        for (Pool.Entry entry : list) {
+            ProxyConfig cfg = entry.cfg();
+            if (cfg == null) continue;
             if (stopRequested.get()) return;
             if (cfg.raw.equals(currentRaw)) continue;
             if (tried >= 3) break;
             tried++;
             sendStatus("connecting", "Переключаюсь: " + truncate(cfg.name, 42) + "…");
-            if (activate(cfg, false)) {
+            boolean ok;
+            if (!entry.dpi.isEmpty()) {
+                ok = activate(cfg, entry.dpi);                 // как при замере: с обходом
+                if (!ok) ok = activate(cfg, null);             // и один раз напрямую
+            } else {
+                ok = activate(cfg, null);                      // как при замере: напрямую
+                if (!ok && Prefs.desyncLine(this)) ok = activate(cfg, Prefs.dpiStrategy(this));
+            }
+            if (ok) {
                 if (wasTor) {
                     // Из резервного Tor обратно на конфиг: hev смотрел в 9050 — переводим
                     // на локальный SOCKS ядра, иначе туннель остался бы на Tor.
@@ -675,14 +770,87 @@ public class BypassVpnService extends VpnService {
                 }
                 currentMode = MODE_XRAY;
                 localSocksPort = XRAY_PORT;
+                // Переключились — значит дело было в старом конфиге, а не в сети.
+                if (blameCurrent && previous != null
+                        && (currentConfig == null || !previous.raw.equals(currentConfig.raw))) {
+                    discard(previous, "канал перестал отвечать");
+                }
                 sendStatus("on", currentDetail);
                 return;
             }
+            discard(cfg, lastError);   // не поднялся — из пула в чёрный список
         }
         // Ни один конфиг не поднялся: пробуем резервный Tor, иначе — честная ошибка.
         if (torMode || tryTorFallback("Канал не отвечает, других рабочих конфигов нет")) return;
         sendStatus("error", "Канал не отвечает, других рабочих конфигов в пуле нет. "
                 + "Нажмите «Собрать пул».");
+    }
+
+    // ------------------------------------------------------------------ пауза
+
+    /**
+     * Пауза: снимаем TUN и tun2socks — трафик идёт с хоста напрямую, как будто VPN нет.
+     * Ядро Xray не гасим: продолжение не требует новой проверки конфига (и пауза честно
+     * выглядит паузой, а не «выключено»). Монитор останавливаем — иначе он принял бы
+     * отсутствие канала за сбой и начал бы менять конфиги прямо под паузой.
+     */
+    private void pauseTunnel() {
+        if (!running.get()) {
+            sendStatus("off", "Туннель не запущен");
+            return;
+        }
+        if (paused) {
+            sendStatus("paused", "Пауза · трафик идёт напрямую");
+            return;
+        }
+        paused = true;
+        if (monitorThread != null) {
+            monitorThread.interrupt();
+            monitorThread = null;
+        }
+        teardownTunnel();
+        releaseWakeLock();
+        Log.i(TAG, "пауза: TUN снят, трафик идёт напрямую");
+        sendStatus("paused", "Пауза · трафик идёт напрямую");
+    }
+
+    /** Продолжить: поднять TUN на том же конфиге — без нового перебора и замера. */
+    private void resumeTunnel() {
+        if (!paused) return;
+        paused = false;
+        sendStatus("connecting", "Продолжаю…");
+        Thread t = new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    if (!Probe.waitSocks(localSocksPort, 1500)) {
+                        // Ядро всё-таки умерло (например, систему придушила память):
+                        // честно проходим весь путь заново, а не делаем вид, что всё хорошо.
+                        Log.w(TAG, "продолжение: локальный SOCKS не отвечает — подключаюсь заново");
+                        resetEngine();
+                        stopRequested.set(false);
+                        startWorker();
+                        return;
+                    }
+                    ParcelFileDescriptor fd = establishTun(torMode ? TorTunnel.DNS : null);
+                    if (fd == null) {
+                        fail("Не удалось создать TUN после паузы (VPN не разрешён?)");
+                        return;
+                    }
+                    tun = fd;
+                    startTunnel(localSocksPort, torMode);
+                    running.set(true);
+                    acquireWakeLock();
+                    startMonitor();
+                    sendStatus("on", currentDetail);
+                    Log.i(TAG, "продолжение: туннель поднят снова");
+                } catch (Throwable e) {
+                    Log.e(TAG, "продолжение не удалось", e);
+                    fail("Не удалось продолжить: " + e.getMessage());
+                }
+            }
+        }, "bypass-resume");
+        t.setDaemon(true);
+        t.start();
     }
 
     // ------------------------------------------------------------------ остановка
@@ -700,6 +868,7 @@ public class BypassVpnService extends VpnService {
     private void resetEngine() {
         stopRequested.set(true);
         running.set(false);
+        paused = false;
         currentSocksPort = -1;
         currentDetail = "";
         if (monitorThread != null) {
@@ -772,7 +941,7 @@ public class BypassVpnService extends VpnService {
         }
     }
 
-    /** Уведомление с двумя действиями: «Остановить» и «Переключить». */
+    /** Уведомление с тремя действиями: «Пауза/Продолжить», «Остановить», «Переключить». */
     private Notification buildNotification(String text) {
         PendingIntent open = PendingIntent.getActivity(this, 0,
                 new Intent(this, MainActivity.class),
@@ -782,6 +951,12 @@ public class BypassVpnService extends VpnService {
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         PendingIntent swtch = PendingIntent.getService(this, 2,
                 new Intent(this, BypassVpnService.class).setAction(ACTION_SWITCH),
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        PendingIntent pause = PendingIntent.getService(this, 3,
+                new Intent(this, BypassVpnService.class).setAction(ACTION_PAUSE),
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        PendingIntent resume = PendingIntent.getService(this, 4,
+                new Intent(this, BypassVpnService.class).setAction(ACTION_RESUME),
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
 
         Notification.Builder builder;
@@ -798,6 +973,9 @@ public class BypassVpnService extends VpnService {
                 .setOnlyAlertOnce(true)
                 .setShowWhen(false)
                 .setContentIntent(open)
+                .addAction(paused ? R.drawable.ic_stat_play : R.drawable.ic_stat_pause,
+                        paused ? "Продолжить" : "Пауза",
+                        paused ? resume : pause)
                 .addAction(R.drawable.ic_stat_stop, "Остановить", stop)
                 .addAction(R.drawable.ic_stat_switch, "Переключить", swtch);
         return builder.build();
@@ -811,6 +989,8 @@ public class BypassVpnService extends VpnService {
             text = (detail == null || detail.isEmpty()) ? "Подключено" : detail;
         } else if ("connecting".equals(state)) {
             text = (detail == null || detail.isEmpty()) ? "Подключение…" : detail;
+        } else if ("paused".equals(state)) {
+            text = "Пауза · трафик идёт напрямую";
         } else if ("error".equals(state)) {
             text = "Ошибка: " + (detail == null ? "" : detail);
         } else {

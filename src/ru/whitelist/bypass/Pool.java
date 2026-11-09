@@ -138,6 +138,12 @@ public final class Pool {
     }
 
     public static synchronized void save(Context c, List<Entry> entries) {
+        write(c, entries);
+        Prefs.setPoolBuiltAt(c, System.currentTimeMillis());
+    }
+
+    /** Запись файла пула без отметки «пул собран» (удаление конфига — не сбор). */
+    private static synchronized void write(Context c, List<Entry> entries) {
         List<Entry> copy = new ArrayList<>(entries);
         sortBySpeed(copy);
         StringBuilder sb = new StringBuilder();
@@ -155,7 +161,28 @@ public final class Pool {
             fos.write(sb.toString().getBytes(StandardCharsets.UTF_8));
         } catch (Exception ignored) {
         }
-        Prefs.setPoolBuiltAt(c, System.currentTimeMillis());
+    }
+
+    /**
+     * Убрать конфиг из пула — «в урну». Вызывается, когда конфиг перестал работать:
+     * держать в пуле то, что не поднимается, бессмысленно, оно только занимает попытку.
+     */
+    public static synchronized boolean remove(Context c, String raw) {
+        if (raw == null || raw.trim().isEmpty()) return false;
+        String key = ConfigRepository.canonicalKey(raw);
+        if (key == null || key.isEmpty()) return false;
+        List<Entry> list = load(c);
+        List<Entry> out = new ArrayList<>();
+        boolean removed = false;
+        for (Entry e : list) {
+            if (key.equals(ConfigRepository.canonicalKey(e.raw))) {
+                removed = true;
+                continue;
+            }
+            out.add(e);
+        }
+        if (removed) write(c, out);
+        return removed;
     }
 
     /** Добавить/обновить один конфиг (используется после удачного подключения и быстрого поиска). */
