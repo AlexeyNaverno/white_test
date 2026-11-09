@@ -748,7 +748,7 @@ public class SettingsActivity extends Activity {
         }
 
         TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.1.8\n"
+        footer.setText("Обход Белых Списков 0.1.9\n"
                 + versionLine() + "\n"
                 + "Открытый проект без разработчика: код под GPL-3.0, форкайте и переписывайте.\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");

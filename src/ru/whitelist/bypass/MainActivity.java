@@ -81,7 +81,11 @@ public class MainActivity extends Activity {
     private final Runnable statusSync = new Runnable() {
         @Override public void run() {
             boolean on = BypassVpnService.isRunning();
-            if (on) {
+            if (on && BypassVpnService.isPaused()) {
+                statusPill.setText("❚❚ Пауза");
+                statusPill.setTextColor(0xFF64B5F6);
+                stylePowerButton("paused");
+            } else if (on) {
                 boolean tor = BypassVpnService.isTorMode();
                 statusPill.setText(tor ? "● Tor-мосты" : "● Подключено");
                 statusPill.setTextColor(tor ? PURPLE : ACCENT);
@@ -233,6 +237,16 @@ public class MainActivity extends Activity {
         card.addView(poolText);
         root.addView(card);
 
+        // Что можно сделать, не открывая приложение: всё это — кнопки в уведомлении.
+        TextView hint = new TextView(this);
+        hint.setText("В уведомлении — «Пауза» (трафик идёт напрямую, конфиг остаётся выбранным), "
+                + "«Переключить» и «Остановить». Конфиг, который перестал подключаться, "
+                + "уходит из пула в чёрный список сам.");
+        hint.setTextSize(11);
+        hint.setTextColor(TEXT_DIM);
+        hint.setPadding(dp(2), dp(12), dp(2), 0);
+        root.addView(hint);
+
         // лог: фиксированная высота + ползунок прокрутки, чтобы можно было листать вверх
         logText = new TextView(this);
         logText.setText("Лог: готов");
@@ -308,6 +322,12 @@ public class MainActivity extends Activity {
             bg = PURPLE_DARK;
             fg = 0xFFFFFFFF;
             text = "Отмена";
+        } else if ("paused".equals(state)) {
+            // Пауза: туннель снят, трафик идёт с хоста. Кнопка по-прежнему «Отключить» —
+            // сервис жив, и выключить его нужно явно.
+            bg = 0xFF1565C0;
+            fg = 0xFFFFFFFF;
+            text = "Отключить";
         } else if ("on".equals(state)) {
             bg = 0xFFC62828;
             fg = 0xFFFFFFFF;
@@ -452,6 +472,13 @@ public class MainActivity extends Activity {
             if (detail != null && !detail.isEmpty()) log("Подключено: " + detail);
             applyRunningUi(true);
             refreshPoolCard();
+        } else if ("paused".equals(state)) {
+            statusPill.setText("❚❚ Пауза");
+            statusPill.setTextColor(0xFF64B5F6);
+            stylePowerButton("paused");
+            log("Пауза: трафик идёт напрямую (продолжить — кнопкой в уведомлении)");
+            applyRunningUi(true);
+            refreshPoolCard();
         } else if ("connecting".equals(state)) {
             statusPill.setText(tor ? "● Tor-мосты…" : "● Подключение…");
             statusPill.setTextColor(tor ? PURPLE : ORANGE);
@@ -476,6 +503,7 @@ public class MainActivity extends Activity {
 
     private void applyRunningUi(boolean on) {
         if (on) {
+            if (BypassVpnService.isPaused()) return;   // «Пауза» рисует refreshConnectionUi
             boolean tor = BypassVpnService.isTorMode();
             statusPill.setText(tor ? "● Tor-мосты" : "● Подключено");
             statusPill.setTextColor(tor ? PURPLE : ACCENT);

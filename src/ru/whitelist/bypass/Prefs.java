@@ -117,24 +117,30 @@ public final class Prefs {
      * списки, которые уже проверены на пинг/скорость их авторами, потом массовые сборники,
      * и только в конце — самый большой файл (на телефоне до него обычно не доходит:
      * хранилище ограничено MAX_LINES).
+     *
+     * Список сверен 2026-11: убраны ByeWhiteLists2 (не обновлялся с марта) и 26info
+     * (одна строка, год без обновлений), добавлены белые SNI от kort0881 и ежедневный
+     * сборник aviamastersgh. DPI-источники и стратегии не трогались.
      */
     public static final String[] DEFAULT_SOURCES = {
-            // авторы уже проверили пинг/скорость — самые «плотные» списки
+            // 1–2. Авторы уже проверили пинг и скорость — самые «плотные» списки.
             "https://raw.githubusercontent.com/luxxuria/harvester/main/speed_tested.txt",
             "https://raw.githubusercontent.com/luxxuria/harvester/main/ping_tested.txt",
+            // 3–4. Под РФ: локальный SNI и белые SNI (обновляются ежедневно).
             "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni-local/vless.txt",
-            // массовые сборники под РФ
+            "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/vless.txt",
+            // 5–8. Массовые сборники под РФ: чёрные списки, белые SNI/CIDR.
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS_mobile.txt",
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-all.txt",
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS.txt",
+            // 9. «Антиглушилки»: большой список, авторы сами его проверяют.
             "https://raw.githubusercontent.com/wlunlocker/vpn-configs/main/whitelist_all.txt",
-            "https://raw.githubusercontent.com/ByeWhiteLists/ByeWhiteLists2/refs/heads/main/ByeWhiteLists2.txt",
-            // JSON с результатами автопроверки ключей: ссылки вытаскиваются из него как есть
+            // 10. JSON с результатами автопроверки ключей: ссылки вытаскиваются как есть.
             "https://raw.githubusercontent.com/tiagorrg/vless-checker/main/docs/keys.json",
-            // небольшой список «рабочих» прокси
-            "https://raw.githubusercontent.com/26info/vless-proxy-list/main/working-proxies.txt",
-            // общий большой сборник — последним
+            // 11. Крупный ежедневный сборник (несколько тысяч строк) — предпоследним.
+            "https://raw.githubusercontent.com/aviamastersgh/vpn-free-russia/main/all_configs.txt",
+            // 12. Общий большой сборник — последним: до него дело обычно не доходит.
             "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/vless.txt"
     };
 

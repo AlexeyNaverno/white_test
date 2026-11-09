@@ -111,13 +111,30 @@ public final class TorEngine {
                 String t = line.trim();
                 if (t.isEmpty() || t.startsWith("#")) continue;
                 if (t.regionMatches(true, 0, "Bridge ", 0, 7)) t = t.substring(7).trim();
-                if (t.matches("^(\\d{1,3}\\.){3}\\d{1,3}:\\d{1,5}$") || t.matches("^[^\\s:]+:\\d{1,5}$")) {
-                    builtin.add(t);
-                }
+                // Встроенный список — в формате BridgeDB: «IP:порт отпечаток». Раньше здесь
+                // требовался ровно «IP:порт», и НИ ОДНА встроенная строка не проходила
+                // проверку — Tor-резерв падал с «нет мостов». Отпечаток tor принимает
+                // (он идёт в torrc как «Bridge IP:порт отпечаток»), поэтому строку храним целиком.
+                if (isBridgeLine(t)) builtin.add(t);
             }
         } catch (IOException ignored) {
         }
         return builtin;
+    }
+
+    /** Похоже ли на строку моста: «IP:порт», «IP:порт отпечаток», «obfs4 IP:порт …». */
+    private static boolean isBridgeLine(String t) {
+        if (t == null || t.isEmpty() || t.startsWith("#")) return false;
+        String[] parts = t.split("\\s+");
+        if (parts.length >= 2) {
+            String kind = parts[0].toLowerCase(java.util.Locale.US);
+            if (kind.equals("obfs4") || kind.equals("webtunnel")
+                    || kind.equals("snowflake") || kind.equals("meek")) {
+                return true;
+            }
+        }
+        return parts[0].matches("^(\\d{1,3}\\.){3}\\d{1,3}:\\d{1,5}$")
+                || parts[0].matches("^[^\\s:]+:\\d{1,5}$");
     }
 
     /**
