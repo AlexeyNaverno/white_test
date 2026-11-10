@@ -41,6 +41,13 @@
             android:label="Настройки"
             android:exported="false" />
 
+        <!-- Рабочие конфиги: список пула, пинг, перемер, удаление, чёрный список -->
+        <activity
+            android:name=".PoolActivity"
+            android:label="Рабочие конфиги"
+            android:exported="false"
+            android:configChanges="orientation|screenSize" />
+
         <!-- Встроенный браузер (экспериментально): одна вкладка, поиск DuckDuckGo -->
         <activity
             android:name=".BrowserActivity"

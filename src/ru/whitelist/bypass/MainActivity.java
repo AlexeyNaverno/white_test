@@ -235,6 +235,17 @@ public class MainActivity extends Activity {
         poolText.setTextColor(TEXT);
         poolText.setPadding(0, dp(6), 0, 0);
         card.addView(poolText);
+        // Карточка пула открывает список рабочих конфигов: там видно, что живо,
+        // и мёртвое можно убрать или отправить в чёрный список не дожидаясь подключения.
+        card.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                if (Pool.count(MainActivity.this) == 0) {
+                    toast("Пул пуст — нажмите «Собрать пул»");
+                    return;
+                }
+                startActivity(new Intent(MainActivity.this, PoolActivity.class));
+            }
+        });
         root.addView(card);
 
         // Что можно сделать, не открывая приложение: всё это — кнопки в уведомлении.
@@ -533,6 +544,9 @@ public class MainActivity extends Activity {
                         if (n > 0) {
                             sb.append('\n').append("Собран: ").append(dateStr(at));
                             if (!active.isEmpty()) sb.append(" · активный: ").append(truncate(active, 40));
+                            // Карточка кликабельна — об этом надо сказать: иначе про экран
+                            // «Рабочие конфиги» знают только те, кто нашёл его в настройках.
+                            sb.append('\n').append("Нажмите: пинг, перемер, удаление");
                         } else {
                             sb.append('\n').append("Пул пуст — «Подключить» найдёт первый рабочий сам");
                         }

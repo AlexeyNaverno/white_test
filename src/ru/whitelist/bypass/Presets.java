@@ -130,10 +130,12 @@ public final class Presets {
     };
 
     private static final String[] WIFI_HEALTH_URLS = {
-            "https://discord.com/",
+            // Без Discord и YouTube: конфигов, которые открывают только их, слишком много,
+            // и проверка канала по ним пропускала бы «односервисные» конфиги.
+            "https://raw.githubusercontent.com/luxxuria/harvester/main/ping_tested.txt",
             "https://www.instagram.com/",
             "https://x.com/",
-            "https://www.youtube.com/",
+            "https://github.com/",
             "https://speed.cloudflare.com/__down?bytes=65536"
     };
 
