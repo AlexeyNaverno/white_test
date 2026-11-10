@@ -417,6 +417,18 @@ public class SettingsActivity extends Activity {
         add(poolOut);
         importLog = poolOut;
 
+        Button openPool = smallButton("Открыть рабочие конфиги: пинг, перемер, удаление");
+        openPool.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                if (Pool.count(SettingsActivity.this) == 0) {
+                    toast("Пул пуст — сначала «Собрать пул» на главном экране");
+                    return;
+                }
+                startActivity(new Intent(SettingsActivity.this, PoolActivity.class));
+            }
+        });
+        addAction(openPool, "Рабочие конфиги", Help.POOL_CONFIGS);
+
         Button exportPool = smallButton("Экспорт рабочих конфигов в .txt");
         exportPool.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
@@ -748,7 +760,7 @@ public class SettingsActivity extends Activity {
         }
 
         TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.1.9\n"
+        footer.setText("Обход Белых Списков 0.1.10\n"
                 + versionLine() + "\n"
                 + "Открытый проект без разработчика: код под GPL-3.0, форкайте и переписывайте.\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");

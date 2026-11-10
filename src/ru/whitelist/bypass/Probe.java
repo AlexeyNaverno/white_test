@@ -44,22 +44,43 @@ public final class Probe {
         public final int attempts;
         /** Чем закончилась последняя неудачная попытка (для лога). */
         public final String error;
+        /**
+         * Хотя бы один адрес ответил 2xx/3xx без тела (generate_204 и подобные).
+         *
+         * Это ДОКАЗАТЕЛЬСТВО, что туннель работает, просто мерить в пустом ответе
+         * нечего. Раньше такой ответ считался провалом и конфиг уходил в чёрный
+         * список — а «белые» конфиги, которые пускают только Cloudflare/Google,
+         * отвечают ровно так. Отсюда и бралось «рабочие конфиги помечаются
+         * неактивными».
+         */
+        public final boolean emptyAnswer;
 
         Speed(long kbps, String url, long bytes, long ms, int attempts) {
             this(kbps, url, bytes, ms, attempts, "");
         }
 
         Speed(long kbps, String url, long bytes, long ms, int attempts, String error) {
+            this(kbps, url, bytes, ms, attempts, error, false);
+        }
+
+        Speed(long kbps, String url, long bytes, long ms, int attempts, String error,
+              boolean emptyAnswer) {
             this.kbps = kbps;
             this.url = url == null ? "" : url;
             this.bytes = bytes;
             this.ms = ms;
             this.attempts = attempts;
             this.error = error == null ? "" : error;
+            this.emptyAnswer = emptyAnswer;
         }
 
         public boolean ok() {
             return kbps > 0;
+        }
+
+        /** Туннель точно работает: либо скорость измерена, либо пришёл пустой 204. */
+        public boolean alive() {
+            return kbps > 0 || emptyAnswer;
         }
 
         /**
@@ -198,7 +219,7 @@ public final class Probe {
         if (best <= 0 && emptyAnswer && lastError.isEmpty()) {
             lastError = "серверы ответили 204 без тела — мерить нечего";
         }
-        return new Speed(best, bestUrl, bestBytes, bestMs, attempts, lastError);
+        return new Speed(best, bestUrl, bestBytes, bestMs, attempts, lastError, emptyAnswer);
     }
 
     /**
@@ -227,9 +248,14 @@ public final class Probe {
                 if (isCdnFriendly(u) && !isBodyless(u) && !plan.contains(u)) { plan.add(u); break; }
             }
         }
+        // В коротком плане (2 попытки: поиск, подключение) последний слот отдаём ответу
+        // generate_204. Иначе «белый» конфиг, который пускает только Cloudflare/Google,
+        // проверялся двумя адресами GitHub, не отвечал ни на один — и считался мёртвым,
+        // хотя канал работает. Скорость по 204 не считается, но связность доказана.
+        int bodySlots = maxUrls <= 3 ? Math.max(1, maxUrls - 1) : maxUrls;
         // сначала всё, в чём есть тело — по нему можно посчитать скорость
         for (String u : urls) {
-            if (plan.size() >= maxUrls) break;
+            if (plan.size() >= bodySlots) break;
             if (!plan.contains(u) && !isBodyless(u)) plan.add(u);
         }
         // generate_204 — в конце: связность подтвердят, скорость — нет
@@ -397,10 +423,17 @@ public final class Probe {
             }
             // Три попытки: GitHub может быть закрыт, Cloudflare — открыт (и наоборот).
             Speed s = measureSpeed(ctx, port, timeoutMs, 3);
-            if (!s.ok()) {
-                return new Result(false, -1, port, s.text(), s, true);
+            if (s.ok()) return new Result(true, s.kbps, port, "", s);
+            // Пустой 204 — туннель работает, мерить нечего. Ставим минимальную скорость,
+            // чтобы запись не выпала из пула и не попала в чёрный список: для «белого»
+            // канала, который пускает только Cloudflare/Google, это единственный ответ,
+            // который вообще можно получить.
+            if (s.alive()) {
+                return new Result(true, Math.max(1, Prefs.minSpeedKbps(ctx)), port,
+                        "туннель работает (ответ 204 без тела) — скорость не измерена",
+                        s, false);
             }
-            return new Result(true, s.kbps, port, "", s);
+            return new Result(false, -1, port, s.text(), s, true);
         } finally {
             XrayEngine.stopInstance(controller);
             if (viaDpi) DesyncLine.stop();

@@ -105,11 +105,18 @@ public final class Prefs {
             "https://raw.githubusercontent.com/alimali54/DPIscord/main/linux/byedpi/strategies.txt"
     };
 
-    /** Через эти адреса проверяется, пробивает ли стратегия DPI блокировку. */
+    /**
+     * Через эти адреса проверяется, пробивает ли стратегия DPI блокировку.
+     *
+     * Discord и YouTube отсюда убраны намеренно: появилась масса конфигов и стратегий,
+     * которые открывают ровно эти два сервиса и больше ничего, — по ним нельзя судить,
+     * что канал годится для «всех сайтов». Остались адреса, которые блокируют
+     * по SNI/IP и которые нельзя «разрешить» точечно под один сервис.
+     */
     public static final String[] DEFAULT_DPI_TEST_URLS = {
-            "https://discord.com/",
-            "https://www.youtube.com/generate_204",
-            "https://www.instagram.com/"
+            "https://raw.githubusercontent.com/luxxuria/harvester/main/ping_tested.txt",
+            "https://www.instagram.com/",
+            "https://x.com/"
     };
 
     /**
@@ -149,11 +156,11 @@ public final class Prefs {
      * Проверяются параллельно, поэтому «медленный, но живой» канал виден сразу.
      */
     public static final String[] DEFAULT_PING_TARGETS = {
-            "discord.com:443",
             "www.instagram.com:443",
             "x.com:443",
             "www.facebook.com:443",
-            "www.youtube.com:443"
+            "www.linkedin.com:443",
+            "raw.githubusercontent.com:443"
     };
 
     /**
@@ -162,6 +169,9 @@ public final class Prefs {
      * каждый адрес живёт на своей инфраструктуре — одного ответа достаточно.
      */
     public static final String[] DEFAULT_HEALTH_URLS = {
+            // Настоящий зарубежный источник, а не только «белые» 204: по нему видно,
+            // что канал открывает не одни лишь разрешённые сервисы.
+            "https://raw.githubusercontent.com/luxxuria/harvester/main/ping_tested.txt",
             "http://cp.cloudflare.com/generate_204",
             "https://www.google.com/generate_204",
             "https://connectivitycheck.gstatic.com/generate_204"
@@ -179,10 +189,14 @@ public final class Prefs {
      * зарубежным источникам люди и включают обход.
      */
     public static final String[] DEFAULT_SPEED_URLS = {
+            // Первыми идут файлы, которые НЕЛЬЗЯ отдать «точечно разрешённым» каналом:
+            // если через конфиг скачался зарубежный список — он годится не только для
+            // пары популярных сервисов. generate_204 остаются в конце: они подтверждают
+            // связность, но тела в них нет, и мерять по ним нечего.
+            "https://raw.githubusercontent.com/luxxuria/harvester/main/ping_tested.txt",
+            "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni-local/vless.txt",
             "http://cp.cloudflare.com/generate_204",
-            "https://www.google.com/generate_204",
-            "https://raw.githubusercontent.com/luxxuria/harvester/main/speed_tested.txt",
-            "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/vless.txt"
+            "https://www.google.com/generate_204"
     };
 
     public static SharedPreferences get(Context ctx) {
@@ -461,6 +475,15 @@ public final class Prefs {
             if (p.getInt(PING_TIMEOUT_MS, 0) == 2500) e.putInt(PING_TIMEOUT_MS, 1000);
             e.putBoolean("migrated_timeouts_v2", true);
             e.apply();
+        }
+        // 0.1.10: в 0.1.9 конфиг, который ответил «204 без тела», считался провалившимся
+        // и уходил в чёрный список вместе с настоящими мертвецами. Причина исправлена,
+        // но старые записи живут неделю — и рабочие конфиги остались бы «неактивными».
+        // Чистим список один раз при обновлении: перепроверить десяток конфигов дешевле,
+        // чем неделю не видеть рабочие.
+        if (!p.getBoolean("migrated_blacklist_v20", false)) {
+            Blacklist.clear(c);
+            p.edit().putBoolean("migrated_blacklist_v20", true).apply();
         }
         migrateToStandardPreset(c);
     }
