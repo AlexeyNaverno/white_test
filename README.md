@@ -611,22 +611,34 @@ Meshtastic + LLM как шлюз наружу — там же и на экран
 
 Способов три, они равнозначны. Выбирайте тот, под который у вас уже есть кошелёк.
 
-| Актив | Сеть | Ориентир | Адрес |
-|---|---|---|---|
-| **USDT** | **TON** (jetton) | любая сумма | `UQBYs3wqrpoUsGoU2edVR7z6_1ctSH4HU2ZZf5DXPToQ3wgi` |
-| **USDT** | **TRON** (TRC-20) | 20 USDT | `TUZeuyvA9dALj1ee78NSMXvnJeEXxYwZ1a` |
-| **BTC** | **Bitcoin** (SegWit) | любая сумма | `bc1qat0txl9ttmsz2le58yvfw9zvhg7pncj9mmr49h` |
+| Актив | Адрес |
+|---|---|
+| **USDT (TON)** | `UQBYs3wqrpoUsGoU2edVR7z6_1ctSH4HU2ZZf5DXPToQ3wgi` |
+| **USDT (TRON)** | `TUZeuyvA9dALj1ee78NSMXvnJeEXxYwZ1a` |
+| **Bitcoin** | `bc1qat0txl9ttmsz2le58yvfw9zvhg7pncj9mmr49h` |
 
-Адреса для копирования:
+Адреса по одному — чтобы копирование из блока давало ровно адрес, без подписей.
+
+**USDT (TON)**
 
 ```
-USDT (TON)    UQBYs3wqrpoUsGoU2edVR7z6_1ctSH4HU2ZZf5DXPToQ3wgi
-USDT (TRON)   TUZeuyvA9dALj1ee78NSMXvnJeEXxYwZ1a
-BTC           bc1qat0txl9ttmsz2le58yvfw9zvhg7pncj9mmr49h
+UQBYs3wqrpoUsGoU2edVR7z6_1ctSH4HU2ZZf5DXPToQ3wgi
 ```
 
-В приложении то же самое: **Настройки → Инфо → Поддержка** — три карточки, у каждой кнопка
-«Скопировать адрес» (у Bitcoin ещё «Открыть в кошельке»).
+**USDT (TRON)**
+
+```
+TUZeuyvA9dALj1ee78NSMXvnJeEXxYwZ1a
+```
+
+**Bitcoin**
+
+```
+bc1qat0txl9ttmsz2le58yvfw9zvhg7pncj9mmr49h
+```
+
+В приложении то же самое: **Настройки → Инфо → Поддержка** — три карточки, у каждой адрес и
+кнопка «Скопировать адрес» (у Bitcoin ещё «Открыть в кошельке»).
 
 > ⚠️ Проверяйте **и сеть, и адрес**. USDT в TON и USDT в TRON — разные сети: перевод не в ту
 > сеть, как и перевод другого актива (ERC-20, BEP-20 и т.п.), вернуть невозможно. Адрес

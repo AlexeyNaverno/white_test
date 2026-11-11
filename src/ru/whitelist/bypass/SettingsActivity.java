@@ -677,19 +677,16 @@ public class SettingsActivity extends Activity {
         section("Поддержка");
         note("Поддержка — только деньгами и только на инфраструктуру (домены, тестовые "
                 + "серверы, железо для проверок). Ничего взамен не обещается: приложение "
-                + "останется бесплатным и без рекламы. Любая сумма, любой из трёх способов — "
-                + "они равнозначны.");
+                + "останется бесплатным и без рекламы. Все три адреса равнозначны — "
+                + "выбирайте сеть, под которую у вас есть кошелёк.");
         note("USDT (TON) — основной адрес проекта. USDT (TRON) и Bitcoin добавлены для тех, "
                 + "у кого нет TON-кошелька. Перед переводом проверяйте сеть: USDT в TON и "
                 + "USDT в TRON — разные сети, перевод не в ту сеть не вернуть.");
-        donateCard("USDT · сеть TON", "Jetton USDT, любая сумма",
-                "UQBYs3wqrpoUsGoU2edVR7z6_1ctSH4HU2ZZf5DXPToQ3wgi", null);
-        donateCard("USDT · сеть TRON (TRC-20)", "Ориентир — 20 USDT",
-                "TUZeuyvA9dALj1ee78NSMXvnJeEXxYwZ1a", null);
-        donateCard("Bitcoin · сеть Bitcoin", "BTC, любая сумма (SegWit-адрес)",
-                "bc1qat0txl9ttmsz2le58yvfw9zvhg7pncj9mmr49h", "bitcoin");
+        donateCard("USDT (TON)", "UQBYs3wqrpoUsGoU2edVR7z6_1ctSH4HU2ZZf5DXPToQ3wgi", null);
+        donateCard("USDT (TRON)", "TUZeuyvA9dALj1ee78NSMXvnJeEXxYwZ1a", null);
+        donateCard("Bitcoin", "bc1qat0txl9ttmsz2le58yvfw9zvhg7pncj9mmr49h", "bitcoin");
 
-        section("База знаний");        section("База знаний");
+        section("База знаний");
         note("Подробное описание каждой настройки и каждой функции — в файле "
                 + "docs/KNOWLEDGE.txt (он же внутри приложения). Он написан так, чтобы его "
                 + "можно было отдать LLM: ключи настроек, диапазоны, значения по умолчанию, "
@@ -1176,8 +1173,7 @@ public class SettingsActivity extends Activity {
      * @param walletUri "bitcoin" — добавить кнопку «Открыть в кошельке» (URI-схема есть
      *                  только у BTC; для USDT в TON/TRON универсальной ссылки нет).
      */
-    private void donateCard(String title, String subtitle, final String address,
-                            final String walletUri) {
+    private void donateCard(String title, final String address, final String walletUri) {
         LinearLayout box = Ui.inner(this);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -1186,10 +1182,8 @@ public class SettingsActivity extends Activity {
 
         TextView head = Ui.h2(this, title);
         head.setTextSize(14);
+        head.setPadding(0, 0, 0, dp(Ui.S2));
         box.addView(head);
-        TextView sub = Ui.caption(this, subtitle);
-        sub.setPadding(0, dp(2), 0, dp(Ui.S2));
-        box.addView(sub);
 
         TextView addr = Ui.mono(this, address, 12, Ui.ACCENT);
         addr.setPadding(0, 0, 0, dp(Ui.S2));
@@ -1200,7 +1194,7 @@ public class SettingsActivity extends Activity {
         Button copy = Ui.small(this, "Скопировать адрес");
         copy.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                copyToClipboard(title + ": адрес", address);
+                copyToClipboard(title, address);
             }
         });
         buttons.addView(copy, new LinearLayout.LayoutParams(0,

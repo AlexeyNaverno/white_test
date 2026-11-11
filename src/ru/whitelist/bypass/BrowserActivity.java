@@ -157,7 +157,7 @@ public class BrowserActivity extends Activity {
         ws.setUseWideViewPort(true);
         ws.setBuiltInZoomControls(false);
         ws.setSupportMultipleWindows(false);
-        ws.setUserAgentString(ws.getUserAgentString() + " WhitelistBypass/0.1.11");
+        ws.setUserAgentString(ws.getUserAgentString() + " WhitelistBypass/0.1.12");
         web.setWebViewClient(new WebViewClient() {
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 if (url != null && !url.startsWith("about:")) urlBar.setText(url);
@@ -422,7 +422,7 @@ public class BrowserActivity extends Activity {
             conn.setReadTimeout(30000);
             conn.setInstanceFollowRedirects(false);
             conn.setRequestProperty("User-Agent",
-                    "Mozilla/5.0 (Linux; Android) WhitelistBypass/0.1.11");
+                    "Mozilla/5.0 (Linux; Android) WhitelistBypass/0.1.12");
             conn.setRequestProperty("Accept", "text/html,application/xhtml+xml,*/*");
             conn.setRequestProperty("Accept-Language", "ru-RU,ru;q=0.9,en;q=0.8");
             int code = conn.getResponseCode();
