@@ -115,6 +115,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(Ui.BG_OLED);      // OLED: чёрный фон только здесь
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         int p = dp(16);
@@ -423,8 +424,8 @@ public class MainActivity extends Activity {
 
     /** Строка версии для подвала: «Обход Белых Списков 0.1.11 (21)». */
     private String versionLine() {
-        String name = "0.1.11";
-        long code = 21;
+        String name = "0.1.12";
+        long code = 22;
         try {
             android.content.pm.PackageInfo info = getPackageManager()
                     .getPackageInfo(getPackageName(), 0);

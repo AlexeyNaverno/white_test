@@ -1,0 +1,3 @@
+• Home screen is pure black again (#000000): OLED pixels stay off, which saves battery and avoids a grey glow in the dark. Other screens keep near-black (#0B0F14), which reads better under long lists and input fields.
+• Support: amounts and hints removed — each card shows only the network name and the address. USDT (TON), USDT (TRON), Bitcoin.
+• Docs: addresses in README now sit in separate blocks, so copying yields exactly the address.
