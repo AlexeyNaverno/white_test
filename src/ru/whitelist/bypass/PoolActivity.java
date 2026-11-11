@@ -6,6 +6,7 @@ import android.content.DialogInterface;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -35,13 +36,13 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class PoolActivity extends Activity {
 
-    private static final int BG = 0xFF000000;
-    private static final int SURFACE = 0xFF0A0E13;
-    private static final int ACCENT = 0xFF3DDC84;
-    private static final int TEXT = 0xFFE8EEF5;
-    private static final int TEXT_DIM = 0xFF8CA3B8;
-    private static final int RED = 0xFFFF5252;
-    private static final int ORANGE = 0xFFFFAB40;
+    private static final int BG = Ui.BG;
+    private static final int SURFACE = Ui.SURFACE;
+    private static final int ACCENT = Ui.ACCENT;
+    private static final int TEXT = Ui.TEXT;
+    private static final int TEXT_DIM = Ui.TEXT_DIM;
+    private static final int RED = Ui.DANGER;
+    private static final int ORANGE = Ui.WARN;
 
     /** Больше строк не рисуем: пул и так ограничен, а телефон — не сервер. */
     private static final int MAX_ROWS = 60;
@@ -76,59 +77,58 @@ public class PoolActivity extends Activity {
         scroll.setBackgroundColor(BG);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        int p = dp(16);
-        root.setPadding(p, p, p, dp(28));
+        int p = dp(Ui.S4);
+        root.setPadding(p, p, p, dp(Ui.S6));
         scroll.addView(root, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         setContentView(scroll);
         Ui.applyInsets(scroll);
 
-        TextView title = new TextView(this);
-        title.setText("Рабочие конфиги");
-        title.setTextSize(22);
-        title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        title.setTextColor(TEXT);
-        root.addView(title);
+        TextView back = Ui.iconButton(this, "←", Ui.TEXT);
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { finish(); }
+        });
+        root.addView(Ui.headerLeft(this, "Рабочие конфиги",
+                "Проверка пула вживую: пинг, перемер, чистка", back));
 
-        TextView subtitle = new TextView(this);
-        subtitle.setText("Пул: замеры скорости и проверка вживую. Провалившееся можно убрать "
-                + "по одному или сразу все — кнопкой внизу.");
-        subtitle.setTextSize(11);
-        subtitle.setTextColor(TEXT_DIM);
-        subtitle.setPadding(0, dp(6), 0, 0);
-        root.addView(subtitle);
-
-        summary = new TextView(this);
+        summary = Ui.caption(this, "");
+        summary.setTextSize(13);
         summary.setTextColor(TEXT);
-        summary.setTextSize(12);
-        summary.setBackgroundColor(SURFACE);
-        summary.setPadding(dp(12), dp(10), dp(12), dp(10));
+        summary.setBackground(Ui.shape(Ui.SURFACE_2, Ui.STROKE, 1, Ui.R_MD, this));
+        int sp = dp(Ui.S3);
+        summary.setPadding(sp, dp(10), sp, dp(10));
         LinearLayout.LayoutParams summaryLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        summaryLp.topMargin = dp(14);
+        summaryLp.topMargin = dp(Ui.S4);
         summary.setLayoutParams(summaryLp);
         root.addView(summary);
 
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout actions = Ui.card(this);
         LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        actionsLp.topMargin = dp(12);
+        actionsLp.topMargin = dp(Ui.S4);
         actions.setLayoutParams(actionsLp);
+        actions.addView(Ui.overline(this, "Проверка"));
 
-        pingAll = wideButton("Пропинговать все");
+        pingAll = Ui.secondary(this, "Пропинговать все");
         pingAll.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { pingAll(); }
         });
-        actions.addView(pingAll);
+        LinearLayout.LayoutParams a1 = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        a1.topMargin = dp(10);
+        actions.addView(pingAll, a1);
 
-        measureAll = wideButton("Перемерить скорость у всех");
+        measureAll = Ui.secondary(this, "Перемерить скорость у всех");
         measureAll.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { confirmMeasureAll(); }
         });
-        actions.addView(measureAll);
+        LinearLayout.LayoutParams a2 = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        a2.topMargin = dp(Ui.S2);
+        actions.addView(measureAll, a2);
 
-        Button reload = wideButton("Обновить список");
+        Button reload = Ui.ghost(this, "Обновить список");
         reload.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { render(); }
         });
@@ -139,8 +139,7 @@ public class PoolActivity extends Activity {
         list.setOrientation(LinearLayout.VERTICAL);
         root.addView(list);
 
-        blacklistAll = wideButton("В чёрный список все нерабочие (0)");
-        blacklistAll.setTextColor(RED);
+        blacklistAll = Ui.danger(this, "В чёрный список все нерабочие (0)");
         blacklistAll.setEnabled(false);
         blacklistAll.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { confirmBlacklistFailed(); }
@@ -151,13 +150,10 @@ public class PoolActivity extends Activity {
         blacklistAll.setLayoutParams(blLp);
         root.addView(blacklistAll);
 
-        TextView footNote = new TextView(this);
-        footNote.setText("Пинг проверяет только доступность сервера (TCP). Строка «перемерить» "
-                + "поднимает ядро и качает через конфиг — так же, как при сборе пула, "
-                + "включая DPI-обход, если он записан у конфига.");
-        footNote.setTextSize(11);
-        footNote.setTextColor(TEXT_DIM);
-        footNote.setPadding(0, dp(10), 0, 0);
+        TextView footNote = Ui.caption(this, "Пинг проверяет только доступность сервера (TCP). "
+                + "«Перемерить» поднимает ядро и качает через конфиг — так же, как при сборе "
+                + "пула, включая DPI-обход, если он записан у конфига.");
+        footNote.setPadding(dp(2), dp(Ui.S4), dp(2), 0);
         root.addView(footNote);
 
         render();
@@ -173,13 +169,17 @@ public class PoolActivity extends Activity {
         if (changed) updateBlacklistButton();
 
         if (entries.isEmpty()) {
-            TextView empty = new TextView(this);
-            empty.setText("Пул пуст. «Собрать пул» на главном экране обновит списки и замерит "
-                    + "скорость у живых.");
-            empty.setTextColor(TEXT_DIM);
-            empty.setTextSize(12);
-            empty.setPadding(0, dp(16), 0, 0);
-            list.addView(empty);
+            LinearLayout emptyCard = Ui.card(this);
+            emptyCard.addView(Ui.body(this, "Пул пуст"));
+            TextView hint = Ui.caption(this, "«Собрать пул» на главном экране обновит списки "
+                    + "и замерит скорость у живых — после этого здесь появятся строки.");
+            hint.setPadding(0, dp(Ui.S2), 0, 0);
+            emptyCard.addView(hint);
+            LinearLayout.LayoutParams emptyLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            emptyLp.topMargin = dp(Ui.S4);
+            emptyCard.setLayoutParams(emptyLp);
+            list.addView(emptyCard);
         }
 
         int shown = Math.min(entries.size(), MAX_ROWS);
@@ -190,12 +190,9 @@ public class PoolActivity extends Activity {
             list.addView(buildRow(i + 1, e, cfg));
         }
         if (entries.size() > shown) {
-            TextView more = new TextView(this);
-            more.setText("…и ещё " + (entries.size() - shown) + " конфигов: они уходят "
-                    + "в конец по скорости. Полный список — в экспорте пула.");
-            more.setTextColor(TEXT_DIM);
-            more.setTextSize(11);
-            more.setPadding(0, dp(10), 0, 0);
+            TextView more = Ui.caption(this, "…и ещё " + (entries.size() - shown)
+                    + " конфигов: они уходят в конец по скорости. Полный список — в экспорте пула.");
+            more.setPadding(dp(2), dp(Ui.S3), dp(2), 0);
             list.addView(more);
         }
         updateSummary(entries.size());
@@ -212,86 +209,108 @@ public class PoolActivity extends Activity {
     }
 
     private View buildRow(int index, final Pool.Entry entry, final ProxyConfig cfg) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.VERTICAL);
-        row.setBackgroundColor(SURFACE);
-        row.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout row = Ui.card(this);
+        final int pad = dp(Ui.S4);
+        row.setPadding(pad, dp(Ui.S3), pad, dp(Ui.S3));
 
         final Row r = new Row();
         r.entry = entry;
         r.cfg = cfg;
 
-        r.title = new TextView(this);
-        r.title.setTextSize(12);
-        r.title.setTextColor(TEXT);
-        r.title.setText(index + ". " + Prefs.speedText(entry.kbps)
-                + " · пинг " + (entry.pingMs > 0 ? entry.pingMs + " мс" : "—")
-                + " · замер " + ago(entry.at)
-                + (entry.viaDpi() ? " · через DPI" : ""));
-        row.addView(r.title);
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView sub = new TextView(this);
-        String host = cfg.host + ":" + cfg.port;
-        sub.setText(cfg.scheme + " · " + host + (cfg.name != null && !cfg.name.isEmpty()
-                ? " · " + cfg.name : ""));
-        sub.setTextSize(10);
-        sub.setTextColor(TEXT_DIM);
-        sub.setPadding(0, dp(3), 0, 0);
+        r.title = Ui.body(this, index + ". " + Prefs.speedText(entry.kbps));
+        r.title.setTextSize(15);
+        r.title.setTypeface(android.graphics.Typeface.create(
+                "sans-serif-medium", android.graphics.Typeface.NORMAL));
+        head.addView(r.title, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        long ping = entry.pingMs;
+        TextView pingChip = Ui.chip(this, ping > 0 ? ping + " мс" : "пинг —",
+                ping > 0 ? (ping < 300 ? ACCENT : (ping < 800 ? ORANGE : RED)) : TEXT_DIM, false);
+        head.addView(pingChip);
+        row.addView(head);
+
+        TextView sub = Ui.caption(this, cfg.scheme + " · " + cfg.host + ":" + cfg.port
+                + (cfg.name != null && !cfg.name.isEmpty() ? " · " + cfg.name : ""));
+        sub.setPadding(0, dp(Ui.S1), 0, 0);
         row.addView(sub);
 
-        if (entry.viaDpi()) {
-            TextView dpi = new TextView(this);
-            dpi.setText("стратегия: " + DpiStrategies.shorten(entry.dpi));
-            dpi.setTextSize(10);
-            dpi.setTextColor(ORANGE);
-            dpi.setPadding(0, dp(2), 0, 0);
-            row.addView(dpi);
-        }
+        StringBuilder meta = new StringBuilder("замер ").append(ago(entry.at));
+        if (entry.viaDpi()) meta.append(" · обход: ").append(DpiStrategies.shorten(entry.dpi));
+        TextView metaView = Ui.caption(this, meta.toString());
+        metaView.setTextColor(entry.viaDpi() ? ORANGE : TEXT_DIM);
+        row.addView(metaView);
 
-        r.status = new TextView(this);
-        r.status.setTextSize(11);
-        r.status.setTextColor(TEXT_DIM);
-        r.status.setPadding(0, dp(4), 0, 0);
+        r.status = Ui.caption(this, "");
+        r.status.setPadding(0, dp(Ui.S1), 0, 0);
         row.addView(r.status);
 
+        // Две строки по две кнопки: четыре в ряд на узком экране превращаются
+        // в текст по слогам и промахи пальцем.
         LinearLayout buttons = new LinearLayout(this);
-        buttons.setOrientation(LinearLayout.HORIZONTAL);
-        buttons.setPadding(0, dp(8), 0, 0);
+        buttons.setOrientation(LinearLayout.VERTICAL);
+        buttons.setPadding(0, dp(Ui.S2), 0, 0);
 
-        r.ping = tinyButton("Пинг");
+        LinearLayout firstRow = new LinearLayout(this);
+        firstRow.setOrientation(LinearLayout.HORIZONTAL);
+        r.ping = rowButton("Пинг", TEXT, true);
         r.ping.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { pingOne(r); }
         });
-        buttons.addView(r.ping);
+        firstRow.addView(r.ping);
 
-        r.measure = tinyButton("Перемерить");
+        r.measure = rowButton("Перемерить скорость", TEXT, false);
         r.measure.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { measureOne(r); }
         });
-        buttons.addView(r.measure);
+        firstRow.addView(r.measure);
+        buttons.addView(firstRow);
 
-        r.remove = tinyButton("Убрать");
+        LinearLayout secondRow = new LinearLayout(this);
+        secondRow.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams secondLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        secondLp.topMargin = dp(6);
+        secondRow.setLayoutParams(secondLp);
+
+        r.remove = rowButton("Убрать из рабочих", TEXT, true);
         r.remove.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { removeOne(r); }
         });
-        buttons.addView(r.remove);
+        secondRow.addView(r.remove);
 
-        r.black = tinyButton("В ЧС");
-        r.black.setTextColor(RED);
+        r.black = rowButton("В чёрный список", RED, false);
         r.black.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { blacklistOne(r); }
         });
-        buttons.addView(r.black);
+        secondRow.addView(r.black);
+        buttons.addView(secondRow);
         row.addView(buttons);
 
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(10);
+        lp.topMargin = dp(Ui.S3);
         row.setLayoutParams(lp);
 
         String key = ConfigRepository.canonicalKey(entry.raw);
         if (key != null) rows.put(key, r);
         return row;
+    }
+
+    /** Кнопка строки: компактная, но не меньше 40 dp по высоте. */
+    private Button rowButton(String text, int color, boolean left) {
+        Button b = Ui.small(this, text);
+        b.setTextColor(color);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        if (left) lp.rightMargin = dp(5); else lp.leftMargin = dp(5);
+        b.setLayoutParams(lp);
+        b.setPadding(dp(4), 0, dp(4), 0);
+        return b;
     }
 
     private void updateSummary(int total) {
@@ -667,37 +686,6 @@ public class PoolActivity extends Activity {
         measureAll.setEnabled(!value);
         updateBlacklistButton();
         updateSummary(Pool.count(this));
-    }
-
-    private Button wideButton(String text) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setTextColor(TEXT);
-        b.setBackgroundResource(R.drawable.bg_button);
-        b.setTextSize(13);
-        b.setAllCaps(false);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(8);
-        b.setLayoutParams(lp);
-        return b;
-    }
-
-    private Button tinyButton(String text) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setTextColor(TEXT);
-        b.setBackgroundResource(R.drawable.bg_button);
-        b.setTextSize(11);
-        b.setAllCaps(false);
-        b.setMinWidth(0);
-        b.setMinimumWidth(0);
-        b.setPadding(dp(10), dp(4), dp(10), dp(4));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.rightMargin = dp(6);
-        b.setLayoutParams(lp);
-        return b;
     }
 
     private int dp(float v) {

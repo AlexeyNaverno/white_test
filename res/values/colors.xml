@@ -1,13 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Токены цвета. Те же значения продублированы в Ui.java: разметка у приложения
+  программная, поэтому источник правды — Ui, а здесь они лежат для темы и на случай,
+  если когда-нибудь появится XML-разметка.
+-->
 <resources>
-    <color name="bg">#000000</color>
-    <color name="surface">#0A0E13</color>
-    <color name="surface_2">#121A22</color>
+    <color name="bg">#0B0F14</color>
+    <color name="surface">#131A24</color>
+    <color name="surface_2">#1B2532</color>
     <color name="accent">#3DDC84</color>
+    <color name="accent_ink">#04210F</color>
     <color name="accent_dim">#1F5C3A</color>
-    <color name="accent_orange">#FFAB40</color>
-    <color name="red">#FF5252</color>
-    <color name="text">#E8EEF5</color>
-    <color name="text_dim">#8CA3B8</color>
-    <color name="stroke">#222C38</color>
+    <color name="accent_orange">#FFB020</color>
+    <color name="red">#FF6B6B</color>
+    <color name="text">#E9F0F7</color>
+    <color name="text_dim">#93A6BA</color>
+    <color name="stroke">#243040</color>
 </resources>

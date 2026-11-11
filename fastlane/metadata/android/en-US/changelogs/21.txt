@@ -1,0 +1,5 @@
+• New interface: every screen now shares one design system — bordered cards, a 4dp spacing scale, large touch targets, clear states. Home is now status, a big button with a hint, actions, pool and log in separate cards.
+• Settings: pill tabs, content grouped into topic cards, a Save button on every page.
+• Working configs: rows with a ping chip, measurement and strategy; buttons in two rows instead of four squeezed together.
+• Project support: three options — USDT on TON, USDT on TRON (20 USDT) and Bitcoin. Address copies in one tap; Bitcoin also opens in a wallet.
+• No functional changes.

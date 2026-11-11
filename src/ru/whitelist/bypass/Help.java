@@ -409,7 +409,8 @@ public final class Help {
         tv.setPadding(pad, pad, pad, pad);
         tv.setText(text);
         tv.setTextSize(14);
-        tv.setTextColor(0xFFE8EEF5);
+        tv.setTextColor(Ui.TEXT);
+        tv.setLineSpacing(0f, 1.25f);
         tv.setMovementMethod(LinkMovementMethod.getInstance());
         scroll.addView(tv);
         new AlertDialog.Builder(c)
