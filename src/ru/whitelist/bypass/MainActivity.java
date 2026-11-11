@@ -68,12 +68,13 @@ public class MainActivity extends Activity {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
 
-    private TextView statusPill, poolText, logText;
+    private TextView statusPill, statusDetail, powerHint, poolText, logText;
     private ScrollView logScroll;
     /** Полный лог: в консоль попадает последнее, но история остаётся — её можно листать. */
     private final StringBuilder logBuffer = new StringBuilder();
     private static final int LOG_MAX_CHARS = 40000;
-    private Button powerButton, btnQuick, btnPool, btnSettings;
+    private Button powerButton, btnQuick, btnPool;
+    private View btnSettings;
     private BroadcastReceiver receiver;
 
     private volatile boolean searching = false;
@@ -82,21 +83,17 @@ public class MainActivity extends Activity {
         @Override public void run() {
             boolean on = BypassVpnService.isRunning();
             if (on && BypassVpnService.isPaused()) {
-                statusPill.setText("❚❚ Пауза");
-                statusPill.setTextColor(0xFF64B5F6);
+                setStatus("❚❚ Пауза", Ui.INFO);
                 stylePowerButton("paused");
             } else if (on) {
                 boolean tor = BypassVpnService.isTorMode();
-                statusPill.setText(tor ? "● Tor-мосты" : "● Подключено");
-                statusPill.setTextColor(tor ? PURPLE : ACCENT);
+                setStatus(tor ? "● Tor-мосты" : "● Подключено", tor ? Ui.TOR : Ui.ACCENT);
                 stylePowerButton(tor ? "tor" : "on");
             } else if (BypassVpnService.isConnecting()) {
-                statusPill.setText("● Подключение…");
-                statusPill.setTextColor(ORANGE);
+                setStatus("● Подключение…", Ui.WARN);
                 stylePowerButton("connecting");
             } else {
-                statusPill.setText("● Отключено");
-                statusPill.setTextColor(TEXT_DIM);
+                setStatus("● Отключено", Ui.TEXT_DIM);
                 stylePowerButton("off");
             }
             applyRunningUi(on);
@@ -128,115 +125,141 @@ public class MainActivity extends Activity {
         Ui.applyInsets(scroll);
         if (previousCrash != null) showCrashDialog(previousCrash);
 
-        // шапка
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout titleCol = new LinearLayout(this);
-        titleCol.setOrientation(LinearLayout.VERTICAL);
-        TextView title = new TextView(this);
-        title.setText("Обход Белых Списков");
-        title.setTextSize(22);
-        title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        title.setTextColor(TEXT);
-        TextView subtitle = new TextView(this);
-        subtitle.setText("VPN · VLESS · скорость вместо пинга");
-        subtitle.setTextSize(11);
-        subtitle.setTextColor(TEXT_DIM);
-        titleCol.addView(title);
-        titleCol.addView(subtitle);
-        header.addView(titleCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        btnSettings = smallButton("Настройки");
+        // ---- шапка: название, подпись и вход в настройки
+        btnSettings = Ui.iconButton(this, "⚙", Ui.TEXT);
         btnSettings.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 startActivity(new Intent(MainActivity.this, SettingsActivity.class));
             }
         });
-        header.addView(btnSettings);
-        root.addView(header);
+        root.addView(Ui.header(this, "Обход Белых Списков",
+                "VPN · VLESS · скорость вместо пинга", btnSettings));
 
-        // статус
-        statusPill = new TextView(this);
-        statusPill.setText("● Отключено");
-        statusPill.setTextSize(13);
-        statusPill.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        statusPill.setTextColor(TEXT_DIM);
-        statusPill.setPadding(dp(14), dp(7), dp(14), dp(7));
-        statusPill.setBackgroundColor(SURFACE2);
-        LinearLayout.LayoutParams pillLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        pillLp.topMargin = dp(14);
-        statusPill.setLayoutParams(pillLp);
-        root.addView(statusPill);
+        // ---- главная карточка: состояние + большая кнопка
+        LinearLayout hero = Ui.card(this);
+        LinearLayout.LayoutParams heroLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        heroLp.topMargin = dp(18);
+        hero.setLayoutParams(heroLp);
 
-        // главная кнопка
+        LinearLayout statusRow = new LinearLayout(this);
+        statusRow.setOrientation(LinearLayout.HORIZONTAL);
+        statusRow.setGravity(Gravity.CENTER_VERTICAL);
+        statusPill = Ui.chip(this, "● Отключено", Ui.TEXT_DIM, false);
+        statusRow.addView(statusPill);
+        statusDetail = Ui.caption(this, "");
+        statusDetail.setGravity(Gravity.END);
+        LinearLayout.LayoutParams detailLp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        detailLp.leftMargin = dp(10);
+        statusRow.addView(statusDetail, detailLp);
+        hero.addView(statusRow);
+
         LinearLayout powerWrap = new LinearLayout(this);
         powerWrap.setGravity(Gravity.CENTER_HORIZONTAL);
         LinearLayout.LayoutParams wrapLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        wrapLp.topMargin = dp(22);
-        wrapLp.bottomMargin = dp(6);
+        wrapLp.topMargin = dp(18);
         powerWrap.setLayoutParams(wrapLp);
 
         powerButton = new Button(this);
         powerButton.setText("Подключить");
-        powerButton.setTextSize(20);
-        powerButton.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        powerButton.setTextSize(19);
+        powerButton.setTypeface(android.graphics.Typeface.create(
+                "sans-serif-medium", android.graphics.Typeface.NORMAL));
         powerButton.setAllCaps(false);
         powerButton.setPadding(0, 0, 0, 0);
         powerButton.setMinWidth(0);
         powerButton.setMinHeight(0);
+        powerButton.setMinimumWidth(0);
+        powerButton.setMinimumHeight(0);
         powerButton.setStateListAnimator(null);
-        int powerSize = dp(184);
+        powerButton.setBackgroundTintList(null);
+        int powerSize = dp(168);
         powerButton.setLayoutParams(new LinearLayout.LayoutParams(powerSize, powerSize));
-        powerButton.setElevation(dp(8));
         powerButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { toggleConnection(); }
         });
-        stylePowerButton("off");
         powerWrap.addView(powerButton);
-        root.addView(powerWrap);
+        hero.addView(powerWrap);
 
-        // две малые кнопки
-        btnQuick = fullWidthButton("Быстрый поиск: найти 1 рабочий VPN");
+        powerHint = Ui.caption(this, "Нажмите, чтобы подключиться");
+        powerHint.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams hintLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        hintLp.topMargin = dp(14);
+        powerHint.setLayoutParams(hintLp);
+        hero.addView(powerHint);
+        root.addView(hero);
+        stylePowerButton("off");
+
+        // ---- действия: две равные по весу кнопки, каждая со своей подписью
+        LinearLayout actionsCard = Ui.card(this);
+        LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        actionsLp.topMargin = dp(16);
+        actionsCard.setLayoutParams(actionsLp);
+        actionsCard.addView(Ui.overline(this, "Действия"));
+
+        btnQuick = Ui.secondary(this, "Быстрый поиск");
         btnQuick.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 if (searching) { cancelSearch(); return; }
                 startQuickSearch();
             }
         });
-        root.addView(btnQuick);
+        LinearLayout.LayoutParams quickLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        quickLp.topMargin = dp(10);
+        quickLp.bottomMargin = dp(4);
+        actionsCard.addView(btnQuick, quickLp);
+        actionsCard.addView(Ui.caption(this,
+                "Найти один рабочий VPN и подключиться к нему. Быстро, но без выбора."));
 
-        btnPool = fullWidthButton("Собрать пул: обновить все списки + замерить скорость");
+        btnPool = Ui.secondary(this, "Собрать пул");
         btnPool.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 if (searching) { cancelSearch(); return; }
                 startBuildPool();
             }
         });
-        root.addView(btnPool);
+        LinearLayout.LayoutParams poolBtnLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        poolBtnLp.topMargin = dp(14);
+        poolBtnLp.bottomMargin = dp(4);
+        actionsCard.addView(btnPool, poolBtnLp);
+        actionsCard.addView(Ui.caption(this,
+                "Обновить все списки из источников и замерить скорость у живых. Долго, зато "
+                        + "есть из чего выбирать."));
+        root.addView(actionsCard);
 
-        // карточка пула
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackgroundColor(SURFACE);
-        card.setPadding(dp(14), dp(12), dp(14), dp(12));
+        // ---- карточка пула: цифры и переход в «Рабочие конфиги»
+        LinearLayout card = Ui.card(this);
         LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         cardLp.topMargin = dp(16);
         card.setLayoutParams(cardLp);
-        TextView cardTitle = new TextView(this);
-        cardTitle.setText("ПУЛ");
-        cardTitle.setTextSize(11);
-        cardTitle.setTextColor(TEXT_DIM);
-        card.addView(cardTitle);
-        poolText = new TextView(this);
-        poolText.setTextSize(13);
-        poolText.setTextColor(TEXT);
-        poolText.setPadding(0, dp(6), 0, 0);
+
+        LinearLayout poolHead = new LinearLayout(this);
+        poolHead.setOrientation(LinearLayout.HORIZONTAL);
+        poolHead.setGravity(Gravity.CENTER_VERTICAL);
+        TextView poolTitle = Ui.h2(this, "Рабочий пул");
+        poolHead.addView(poolTitle, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView chevron = new TextView(this);
+        chevron.setText("›");
+        chevron.setTextSize(22);
+        chevron.setTextColor(Ui.TEXT_DIM);
+        poolHead.addView(chevron);
+        card.addView(poolHead);
+
+        poolText = Ui.caption(this, "Пул пуст");
+        LinearLayout.LayoutParams poolTextLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        poolTextLp.topMargin = dp(6);
+        poolText.setLayoutParams(poolTextLp);
         card.addView(poolText);
-        // Карточка пула открывает список рабочих конфигов: там видно, что живо,
-        // и мёртвое можно убрать или отправить в чёрный список не дожидаясь подключения.
+
         card.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 if (Pool.count(MainActivity.this) == 0) {
@@ -248,39 +271,46 @@ public class MainActivity extends Activity {
         });
         root.addView(card);
 
-        // Что можно сделать, не открывая приложение: всё это — кнопки в уведомлении.
-        TextView hint = new TextView(this);
-        hint.setText("В уведомлении — «Пауза» (трафик идёт напрямую, конфиг остаётся выбранным), "
-                + "«Переключить» и «Остановить». Конфиг, который перестал подключаться, "
-                + "уходит из пула в чёрный список сам.");
-        hint.setTextSize(11);
-        hint.setTextColor(TEXT_DIM);
-        hint.setPadding(dp(2), dp(12), dp(2), 0);
-        root.addView(hint);
+        // ---- журнал: то, что раньше было «простынёй текста» внизу экрана
+        LinearLayout logCard = Ui.card(this);
+        LinearLayout.LayoutParams logCardLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        logCardLp.topMargin = dp(16);
+        logCard.setLayoutParams(logCardLp);
 
-        // лог: фиксированная высота + ползунок прокрутки, чтобы можно было листать вверх
-        logText = new TextView(this);
-        logText.setText("Лог: готов");
-        logText.setTextSize(10);
-        logText.setTypeface(android.graphics.Typeface.MONOSPACE);
-        logText.setTextColor(TEXT_DIM);
-        logText.setBackgroundColor(SURFACE);
-        logText.setPadding(dp(10), dp(10), dp(10), dp(10));
-        logText.setTextIsSelectable(true);
+        LinearLayout logHead = new LinearLayout(this);
+        logHead.setOrientation(LinearLayout.HORIZONTAL);
+        logHead.setGravity(Gravity.CENTER_VERTICAL);
+        logHead.addView(Ui.overline(this, "Журнал"), new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Button copyLog = Ui.ghost(this, "Копировать");
+        copyLog.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { copyLogToClipboard(); }
+        });
+        logHead.addView(copyLog);
+        logCard.addView(logHead);
 
+        logText = Ui.mono(this, "Лог: готов", 11, Ui.TEXT_DIM);
         logScroll = new ScrollView(this);
-        logScroll.setBackgroundColor(SURFACE);
         logScroll.addView(logText, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         logScroll.setVerticalScrollBarEnabled(true);
         logScroll.setScrollbarFadingEnabled(false);
-        logScroll.setScrollBarStyle(View.SCROLLBARS_INSIDE_INSET);
         logScroll.setFillViewport(true);
+        logScroll.setBackground(Ui.shape(Ui.BG, Ui.STROKE, 1, Ui.R_MD, this));
+        logScroll.setPadding(dp(10), dp(10), dp(10), dp(10));
         LinearLayout.LayoutParams logLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(170));
-        logLp.topMargin = dp(14);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(150));
+        logLp.topMargin = dp(8);
         logScroll.setLayoutParams(logLp);
-        root.addView(logScroll);
+        logCard.addView(logScroll);
+        root.addView(logCard);
+
+        // ---- подвал: версия и напоминание про уведомление
+        TextView footer = Ui.caption(this, versionLine()
+                + "\nВ уведомлении — «Пауза», «Переключить» и «Остановить».");
+        footer.setPadding(dp(4), dp(18), dp(4), 0);
+        root.addView(footer);
 
         registerStatusReceiver();
         requestNotificationPermission();
@@ -319,6 +349,21 @@ public class MainActivity extends Activity {
      * Вид большой круглой кнопки: зелёная «Подключить», оранжевая «Отмена»,
      * красная «Отключить». Так же делают почти все VPN-клиенты.
      */
+    /**
+     * Состояние в шапке карточки: текст + контур нужного цвета.
+     * Раньше здесь просто меняли цвет текста, и «Отключено» выглядело так же, как
+     * «Ошибка», только другим оттенком.
+     */
+    private void setStatus(String text, int color) {
+        if (statusPill == null) return;
+        statusPill.setText(text);
+        Ui.paintChip(statusPill, color, false, this);
+        if (statusDetail != null) {
+            String name = Prefs.currentName(this);
+            statusDetail.setText(name == null ? "" : truncate(name, 26));
+        }
+    }
+
     private void stylePowerButton(String state) {
         if (powerButton == null) return;
         int bg;
@@ -336,24 +381,24 @@ public class MainActivity extends Activity {
         } else if ("paused".equals(state)) {
             // Пауза: туннель снят, трафик идёт с хоста. Кнопка по-прежнему «Отключить» —
             // сервис жив, и выключить его нужно явно.
-            bg = 0xFF1565C0;
-            fg = 0xFFFFFFFF;
+            bg = Ui.INFO;
+            fg = 0xFF04121F;
             text = "Отключить";
         } else if ("on".equals(state)) {
-            bg = 0xFFC62828;
+            bg = 0xFFE5484D;
             fg = 0xFFFFFFFF;
             text = "Отключить";
         } else if ("connecting".equals(state)) {
-            bg = ORANGE;
+            bg = Ui.WARN;
             fg = 0xFF1A1206;
             text = "Отмена";
         } else if ("error".equals(state)) {
-            bg = 0xFF8E2A2A;
+            bg = 0xFF7F2A2E;
             fg = 0xFFFFFFFF;
             text = "Подключить";
         } else {
-            bg = ACCENT;
-            fg = 0xFF0E1C12;
+            bg = Ui.ACCENT;
+            fg = Ui.ACCENT_INK;
             text = "Подключить";
         }
         android.graphics.drawable.GradientDrawable shape =
@@ -364,25 +409,45 @@ public class MainActivity extends Activity {
         powerButton.setBackground(shape);
         powerButton.setTextColor(fg);
         powerButton.setText(text);
+        powerButton.setLetterSpacing(0.01f);
+        if (powerHint != null) {
+            if ("on".equals(state)) powerHint.setText("Туннель включён · нажмите, чтобы отключить");
+            else if ("tor".equals(state)) powerHint.setText("Резервный канал: трафик идёт через Tor-мосты");
+            else if ("paused".equals(state)) powerHint.setText("Пауза: трафик идёт напрямую, конфиг сохранён");
+            else if ("connecting".equals(state) || "tor-connecting".equals(state))
+                powerHint.setText("Подключение… можно отменить этой же кнопкой");
+            else if ("error".equals(state)) powerHint.setText("Не удалось подключиться — попробуйте ещё раз");
+            else powerHint.setText("Нажмите, чтобы подключиться");
+        }
     }
 
-    private Button smallButton(String text) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setTextColor(TEXT);
-        b.setBackgroundResource(R.drawable.bg_button);
-        b.setTextSize(13);
-        b.setAllCaps(false);
-        return b;
+    /** Строка версии для подвала: «Обход Белых Списков 0.1.11 (21)». */
+    private String versionLine() {
+        String name = "0.1.11";
+        long code = 21;
+        try {
+            android.content.pm.PackageInfo info = getPackageManager()
+                    .getPackageInfo(getPackageName(), 0);
+            name = info.versionName == null ? name : info.versionName;
+            code = android.os.Build.VERSION.SDK_INT >= 28
+                    ? info.getLongVersionCode() : info.versionCode;
+        } catch (Exception ignored) {
+        }
+        return "Обход Белых Списков " + name + " (" + code + ")";
     }
 
-    private Button fullWidthButton(String text) {
-        Button b = smallButton(text);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(10);
-        b.setLayoutParams(lp);
-        return b;
+    /** Журнал целиком — в буфер обмена: так его удобнее прислать в обсуждении. */
+    private void copyLogToClipboard() {
+        try {
+            android.content.ClipboardManager cb = (android.content.ClipboardManager)
+                    getSystemService(CLIPBOARD_SERVICE);
+            if (cb == null) return;
+            String text = logBuffer.length() == 0 ? "Лог пуст" : logBuffer.toString();
+            cb.setPrimaryClip(android.content.ClipData.newPlainText("Журнал", text));
+            toast("Журнал скопирован");
+        } catch (Throwable t) {
+            toast("Не удалось скопировать журнал");
+        }
     }
 
     // ------------------------------------------------------------------ подключение
@@ -477,34 +542,29 @@ public class MainActivity extends Activity {
         if (state == null) return;
         boolean tor = BypassVpnService.MODE_TOR.equals(mode) || BypassVpnService.isTorMode();
         if ("on".equals(state)) {
-            statusPill.setText(tor ? "● Tor-мосты" : "● Подключено");
-            statusPill.setTextColor(tor ? PURPLE : ACCENT);
+            setStatus(tor ? "● Tor-мосты" : "● Подключено", tor ? Ui.TOR : Ui.ACCENT);
             stylePowerButton(tor ? "tor" : "on");
             if (detail != null && !detail.isEmpty()) log("Подключено: " + detail);
             applyRunningUi(true);
             refreshPoolCard();
         } else if ("paused".equals(state)) {
-            statusPill.setText("❚❚ Пауза");
-            statusPill.setTextColor(0xFF64B5F6);
+            setStatus("❚❚ Пауза", Ui.INFO);
             stylePowerButton("paused");
             log("Пауза: трафик идёт напрямую (продолжить — кнопкой в уведомлении)");
             applyRunningUi(true);
             refreshPoolCard();
         } else if ("connecting".equals(state)) {
-            statusPill.setText(tor ? "● Tor-мосты…" : "● Подключение…");
-            statusPill.setTextColor(tor ? PURPLE : ORANGE);
+            setStatus(tor ? "● Tor-мосты…" : "● Подключение…", tor ? Ui.TOR : Ui.WARN);
             stylePowerButton(tor ? "tor-connecting" : "connecting");
             if (detail != null) log(detail);
         } else if ("error".equals(state)) {
-            statusPill.setText("● Ошибка");
-            statusPill.setTextColor(RED);
+            setStatus("● Ошибка", Ui.DANGER);
             stylePowerButton("error");
             if (detail != null) log("Ошибка: " + detail);
             applyRunningUi(false);
             refreshPoolCard();
         } else if ("off".equals(state)) {
-            statusPill.setText("● Отключено");
-            statusPill.setTextColor(TEXT_DIM);
+            setStatus("● Отключено", Ui.TEXT_DIM);
             stylePowerButton("off");
             log("Отключено");
             applyRunningUi(false);
@@ -516,8 +576,7 @@ public class MainActivity extends Activity {
         if (on) {
             if (BypassVpnService.isPaused()) return;   // «Пауза» рисует refreshConnectionUi
             boolean tor = BypassVpnService.isTorMode();
-            statusPill.setText(tor ? "● Tor-мосты" : "● Подключено");
-            statusPill.setTextColor(tor ? PURPLE : ACCENT);
+            setStatus(tor ? "● Tor-мосты" : "● Подключено", tor ? Ui.TOR : Ui.ACCENT);
             stylePowerButton(tor ? "tor" : "on");
         } else if (!"● Подключение…".contentEquals(statusPill.getText())
                 && !"● Tor-мосты…".contentEquals(statusPill.getText())) {
@@ -537,20 +596,21 @@ public class MainActivity extends Activity {
                 final int min = Prefs.minSpeedKbps(MainActivity.this);
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
-                        StringBuilder sb = new StringBuilder();
-                        sb.append("Рабочих: ").append(n)
-                          .append(" · лучший: ").append(Prefs.speedText(best))
-                          .append(" · порог: ").append(Prefs.kbitText(Prefs.minSpeedKbit(MainActivity.this)));
-                        if (n > 0) {
-                            sb.append('\n').append("Собран: ").append(dateStr(at));
-                            if (!active.isEmpty()) sb.append(" · активный: ").append(truncate(active, 40));
-                            // Карточка кликабельна — об этом надо сказать: иначе про экран
-                            // «Рабочие конфиги» знают только те, кто нашёл его в настройках.
-                            sb.append('\n').append("Нажмите: пинг, перемер, удаление");
-                        } else {
-                            sb.append('\n').append("Пул пуст — «Подключить» найдёт первый рабочий сам");
+                        if (poolText == null) return;
+                        if (n == 0) {
+                            poolText.setText("Пусто. «Подключить» найдёт первый рабочий сам, "
+                                    + "а «Собрать пул» — запас на будущее.");
+                            return;
                         }
-                        if (poolText != null) poolText.setText(sb.toString());
+                        StringBuilder sb = new StringBuilder();
+                        sb.append(n).append(n == 1 ? " конфиг" : " конфигов")
+                          .append(" · лучший ").append(Prefs.speedText(best))
+                          .append("\nСобран ").append(dateStr(at));
+                        if (!active.isEmpty()) {
+                            sb.append(" · активный ").append(truncate(active, 28));
+                        }
+                        sb.append("\nНажмите, чтобы проверить: пинг, перемер, удаление");
+                        poolText.setText(sb.toString());
                     }
                 });
             }
@@ -978,11 +1038,10 @@ public class MainActivity extends Activity {
         // Раньше здесь стояло setEnabled(!busy) — из-за этого остановить поиск было нельзя.
         btnQuick.setEnabled(true);
         btnPool.setEnabled(true);
-        btnQuick.setText(busy ? "■ Остановить поиск" : "Быстрый поиск: найти 1 рабочий VPN");
-        btnPool.setText(busy ? "■ Остановить сбор пула"
-                : "Собрать пул: обновить все списки + замерить скорость");
-        btnQuick.setTextColor(busy ? RED : TEXT);
-        btnPool.setTextColor(busy ? RED : TEXT);
+        btnQuick.setText(busy ? "■ Остановить поиск" : "Быстрый поиск");
+        btnPool.setText(busy ? "■ Остановить сбор" : "Собрать пул");
+        btnQuick.setTextColor(busy ? Ui.DANGER : Ui.TEXT);
+        btnPool.setTextColor(busy ? Ui.DANGER : Ui.TEXT);
         if (!busy) refreshPoolCard();
     }
 

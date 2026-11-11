@@ -1,16 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Тёмная тема без ActionBar: шапку каждый экран рисует сам (Ui.header). -->
     <style name="Theme.Bypass" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:statusBarColor">@color/bg</item>
         <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
         <item name="android:colorAccent">@color/accent</item>
         <item name="android:textColorPrimary">@color/text</item>
         <item name="android:textColorSecondary">@color/text_dim</item>
+        <item name="android:colorBackground">@color/bg</item>
         <item name="android:editTextBackground">@drawable/bg_input</item>
         <item name="android:textViewStyle">@style/TextStyle</item>
     </style>
     <style name="TextStyle" parent="@android:style/TextAppearance.Material.Body1">
         <item name="android:textColor">@color/text</item>
+        <item name="android:lineSpacingMultiplier">1.15</item>
     </style>
 </resources>

@@ -54,9 +54,11 @@ public class SettingsActivity extends Activity {
     private LinearLayout tabBar;
     private LinearLayout pageHost;
     private LinearLayout pageBox;
+    /** Карточка текущей секции: всё, что «добавляется», попадает в неё. */
+    private LinearLayout block;
     private ScrollView pageScroll;
     private final java.util.List<LinearLayout> pageViews = new java.util.ArrayList<>();
-    private final java.util.List<Button> pageTabs = new java.util.ArrayList<>();
+    private final java.util.List<TextView> pageTabs = new java.util.ArrayList<>();
     private int currentPage = 0;
     /** Куда писать вывод проверки DPI (живёт на странице «Обход»). */
     private TextView dpiOut;
@@ -79,25 +81,45 @@ public class SettingsActivity extends Activity {
 
         ScrollView scroll = new ScrollView(this);
         pageScroll = scroll;
-        scroll.setBackgroundColor(0xFF000000);
+        scroll.setBackgroundColor(Ui.BG);
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(16), dp(16), dp(32));
+        int pad = dp(Ui.S4);
+        root.setPadding(pad, pad, pad, dp(Ui.S6));
         scroll.addView(root);
         setContentView(scroll);
         Ui.applyInsets(scroll);
+
+        // Шапка: возврат, название, версия. Возврат нужен потому, что «Сохранить» есть
+        // на каждой странице, а «назад» на телефоне не всегда очевидно.
+        TextView back = Ui.iconButton(this, "←", Ui.TEXT);
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                savePrefs();
+                finish();
+            }
+        });
+        root.addView(Ui.headerLeft(this, "Настройки", versionLine(), back));
 
         // Разделы вместо одной длинной простыни: настроек стало слишком много, и найти
         // в них «мосты» или «импорт пула» можно было только прокруткой.
         HorizontalScrollView tabs = new HorizontalScrollView(this);
         tabs.setHorizontalScrollBarEnabled(false);
+        tabs.setClipToPadding(false);
+        LinearLayout.LayoutParams tabsLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tabsLp.topMargin = dp(Ui.S4);
+        tabs.setLayoutParams(tabsLp);
         tabBar = new LinearLayout(this);
         tabBar.setOrientation(LinearLayout.HORIZONTAL);
-        tabBar.setPadding(0, 0, 0, dp(6));
         tabs.addView(tabBar);
         root.addView(tabs);
         pageHost = new LinearLayout(this);
         pageHost.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams hostLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        hostLp.topMargin = dp(Ui.S4);
+        pageHost.setLayoutParams(hostLp);
         root.addView(pageHost);
         newPage("Списки");
 
@@ -652,33 +674,22 @@ public class SettingsActivity extends Activity {
                 + "публиковать в F-Droid: сборка на Gradle, нативные библиотеки собираются "
                 + "из исходников, ни одного предсобранного бинарника в репозитории.");
 
-        section("Донат");
+        section("Поддержка");
         note("Поддержка — только деньгами и только на инфраструктуру (домены, тестовые "
                 + "серверы, железо для проверок). Ничего взамен не обещается: приложение "
-                + "останется бесплатным и без рекламы.");
-        final String donate = "UQBYs3wqrpoUsGoU2edVR7z6_1ctSH4HU2ZZf5DXPToQ3wgi";
-        final TextView donateView = new TextView(this);
-        donateView.setText(donate);
-        donateView.setTextColor(0xFFB388FF);
-        donateView.setTextSize(12);
-        donateView.setTextIsSelectable(true);
-        donateView.setPadding(dp(4), dp(4), dp(4), dp(8));
-        add(donateView);
-        Button copyDonate = smallButton("Скопировать адрес доната");
-        copyDonate.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                android.content.ClipboardManager cb = (android.content.ClipboardManager)
-                        getSystemService(android.content.Context.CLIPBOARD_SERVICE);
-                if (cb != null) {
-                    cb.setPrimaryClip(android.content.ClipData.newPlainText("USDT (TON)", donate));
-                    toast("Адрес скопирован");
-                }
-            }
-        });
-        add(copyDonate);
-        note("USDT (jetton в сети TON). Проверяйте адрес при копировании: это единственный.");
+                + "останется бесплатным и без рекламы. Любая сумма, любой из трёх способов — "
+                + "они равнозначны.");
+        note("USDT (TON) — основной адрес проекта. USDT (TRON) и Bitcoin добавлены для тех, "
+                + "у кого нет TON-кошелька. Перед переводом проверяйте сеть: USDT в TON и "
+                + "USDT в TRON — разные сети, перевод не в ту сеть не вернуть.");
+        donateCard("USDT · сеть TON", "Jetton USDT, любая сумма",
+                "UQBYs3wqrpoUsGoU2edVR7z6_1ctSH4HU2ZZf5DXPToQ3wgi", null);
+        donateCard("USDT · сеть TRON (TRC-20)", "Ориентир — 20 USDT",
+                "TUZeuyvA9dALj1ee78NSMXvnJeEXxYwZ1a", null);
+        donateCard("Bitcoin · сеть Bitcoin", "BTC, любая сумма (SegWit-адрес)",
+                "bc1qat0txl9ttmsz2le58yvfw9zvhg7pncj9mmr49h", "bitcoin");
 
-        section("База знаний");
+        section("База знаний");        section("База знаний");
         note("Подробное описание каждой настройки и каждой функции — в файле "
                 + "docs/KNOWLEDGE.txt (он же внутри приложения). Он написан так, чтобы его "
                 + "можно было отдать LLM: ключи настроек, диапазоны, значения по умолчанию, "
@@ -746,9 +757,11 @@ public class SettingsActivity extends Activity {
         // Сохранение — на каждой странице: иначе после правки настроек приходилось бы
         // возвращаться на вкладку «Инфо».
         for (LinearLayout page : pageViews) {
-            Button save = smallButton("Сохранить");
-            save.setTextColor(0xFF3DDC84);
-            save.setTextSize(16);
+            Button save = Ui.primary(this, "Сохранить настройки");
+            LinearLayout.LayoutParams saveLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            saveLp.topMargin = dp(Ui.S5);
+            save.setLayoutParams(saveLp);
             save.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) {
                     savePrefs();
@@ -759,15 +772,13 @@ public class SettingsActivity extends Activity {
             page.addView(save);
         }
 
-        TextView footer = new TextView(this);
-        footer.setText("Обход Белых Списков 0.1.10\n"
+        TextView footer = Ui.caption(this, "Обход Белых Списков " + appVersion() + " · "
                 + versionLine() + "\n"
                 + "Открытый проект без разработчика: код под GPL-3.0, форкайте и переписывайте.\n"
                 + "Ядра (Xray, ByeDPI, Tor) работают локально; сторонних серверов у приложения нет.");
-        footer.setTextColor(TEXT_DIM);
-        footer.setTextSize(11);
-        footer.setPadding(0, dp(24), 0, 0);
-        add(footer);
+        block = null;                       // подвал — под карточками, а не внутри
+        footer.setPadding(dp(Ui.S4), dp(Ui.S5), dp(Ui.S4), 0);
+        (pageBox != null ? pageBox : root).addView(footer);
     }
 
     @Override
@@ -960,18 +971,14 @@ public class SettingsActivity extends Activity {
         pageViews.add(page);
         pageHost.addView(page);
         pageBox = page;
+        block = null;
 
         final int index = pageViews.size() - 1;
-        Button tab = new Button(this);
-        tab.setText(title);
-        tab.setAllCaps(false);
-        tab.setTextSize(12);
-        tab.setBackgroundResource(R.drawable.bg_button);
-        tab.setTextColor(index == 0 ? 0xFF3DDC84 : TEXT_DIM);
-        tab.setPadding(dp(14), dp(6), dp(14), dp(6));
+        TextView tab = Ui.tab(this, title);
+        if (index == 0) Ui.paintChip(tab, Ui.ACCENT, true, this);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.setMargins(0, 0, dp(6), 0);
+        lp.setMargins(0, 0, dp(12), 0);
         tab.setLayoutParams(lp);
         tab.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
@@ -990,27 +997,46 @@ public class SettingsActivity extends Activity {
             boolean on = i == index;
             pageViews.get(i).setVisibility(on ? View.VISIBLE : View.GONE);
             if (i < pageTabs.size()) {
-                pageTabs.get(i).setTextColor(on ? 0xFF3DDC84 : TEXT_DIM);
+                Ui.paintChip(pageTabs.get(i), on ? Ui.ACCENT : Ui.TEXT_DIM, on, this);
             }
         }
         if (pageScroll != null) pageScroll.scrollTo(0, 0);
     }
 
-    /** Добавить view в текущую страницу (или в корень, пока страниц нет). */
+    /** Добавить view в текущую секцию, иначе — на страницу (или в корень). */
     private void add(View v) {
-        (pageBox != null ? pageBox : root).addView(v);
+        if (block != null) block.addView(v);
+        else if (pageBox != null) pageBox.addView(v);
+        else root.addView(v);
     }
 
     // ------------------------------------------------------------------ строительные блоки
 
+    /**
+     * Начать секцию: заголовок + карточка, в которую попадает всё дальнейшее.
+     *
+     * Раньше секции были просто серыми подписями, и страница выглядела как один поток
+     * полей. Теперь каждый смысловой блок — отдельная поверхность: видно, где кончается
+     * «скорость» и начинается «источники», и по чему можно попасть пальцем.
+     */
     private void section(String text) {
-        TextView tv = new TextView(this);
-        tv.setText(text.toUpperCase());
-        tv.setTextColor(TEXT_DIM);
-        tv.setTextSize(12);
-        tv.setAllCaps(true);
-        tv.setPadding(0, dp(18), 0, dp(6));
-        add(tv);
+        if (pageBox == null) {                       // до первой страницы
+            TextView tv = Ui.overline(this, text);
+            tv.setPadding(0, dp(Ui.S5), 0, dp(Ui.S2));
+            root.addView(tv);
+            block = null;
+            return;
+        }
+        LinearLayout card = Ui.card(this);
+        TextView head = Ui.overline(this, text);
+        head.setPadding(0, 0, 0, dp(Ui.S2));
+        card.addView(head);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(Ui.S3);
+        card.setLayoutParams(lp);
+        pageBox.addView(card);
+        block = card;
     }
 
     private void label(String text) {
@@ -1025,12 +1051,11 @@ public class SettingsActivity extends Activity {
     private void label(String text, String help) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.BOTTOM);
-        row.setPadding(0, dp(2), 0, dp(10));
-        TextView tv = new TextView(this);
-        tv.setText(text);
-        tv.setTextColor(TEXT_DIM);
-        tv.setTextSize(11);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(Ui.S3), 0, dp(6));
+        TextView tv = Ui.caption(this, text);
+        tv.setTextSize(13);
+        tv.setTextColor(TEXT);
         tv.setLayoutParams(new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         row.addView(tv);
@@ -1042,9 +1067,12 @@ public class SettingsActivity extends Activity {
     private View infoButton(final String title, final String help) {
         TextView b = new TextView(this);
         b.setText("ⓘ");
-        b.setTextColor(0xFF3DDC84);
-        b.setTextSize(16);
-        b.setPadding(dp(8), 0, dp(4), 0);
+        b.setTextColor(Ui.ACCENT);
+        b.setTextSize(15);
+        b.setGravity(Gravity.CENTER);
+        int size = dp(28);
+        b.setLayoutParams(new LinearLayout.LayoutParams(size, size));
+        b.setBackground(Ui.shape(Ui.SURFACE_2, Ui.STROKE, 1, Ui.R_PILL, this));
         b.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 Help.show(SettingsActivity.this, title, help);
@@ -1066,21 +1094,19 @@ public class SettingsActivity extends Activity {
     }
 
     private void note(String text) {
-        TextView tv = new TextView(this);
-        tv.setText(text);
-        tv.setTextColor(TEXT_DIM);
-        tv.setTextSize(11);
-        tv.setPadding(dp(4), 0, dp(4), dp(6));
+        TextView tv = Ui.caption(this, text);
+        tv.setPadding(0, dp(Ui.S2), 0, dp(Ui.S2));
         add(tv);
     }
 
     private EditText baseField() {
         EditText et = new EditText(this);
-        et.setBackgroundResource(R.drawable.bg_input);
+        et.setBackground(Ui.shape(Ui.BG, Ui.STROKE, 1, Ui.R_MD, this));
         et.setTextColor(TEXT);
         et.setHintTextColor(TEXT_DIM);
-        et.setPadding(dp(12), dp(10), dp(12), dp(10));
-        et.setTextSize(13);
+        et.setPadding(dp(Ui.S3), dp(10), dp(Ui.S3), dp(10));
+        et.setTextSize(14);
+        et.setTypeface(android.graphics.Typeface.MONOSPACE);
         return et;
     }
 
@@ -1117,11 +1143,10 @@ public class SettingsActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(0, dp(4), 0, dp(4));
-        TextView tv = new TextView(this);
-        tv.setText(text);
-        tv.setTextColor(TEXT);
-        tv.setTextSize(13);
+        row.setPadding(0, dp(Ui.S2), 0, dp(Ui.S2));
+        row.setMinimumHeight(dp(Ui.TOUCH));
+        TextView tv = Ui.body(this, text);
+        tv.setTextSize(14);
         tv.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         row.addView(tv);
         if (help != null) row.addView(infoButton(text, help));
@@ -1133,17 +1158,85 @@ public class SettingsActivity extends Activity {
     }
 
     private Button smallButton(String text) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setTextColor(TEXT);
-        b.setBackgroundResource(R.drawable.bg_button);
-        b.setTextSize(13);
-        b.setAllCaps(false);
+        Button b = Ui.secondary(this, text);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.setMargins(0, dp(6), 0, dp(6));
         b.setLayoutParams(lp);
         return b;
+    }
+
+    /**
+     * Один способ поддержки: название сети, подпись, адрес и кнопки.
+     *
+     * Адрес показывается моноширинным и разбивается на строки сам — так его можно
+     * сверить глазами, не копируя. Копирование — отдельной кнопкой, потому что
+     * выборочное копирование длинной строки на телефоне почти всегда с ошибкой.
+     *
+     * @param walletUri "bitcoin" — добавить кнопку «Открыть в кошельке» (URI-схема есть
+     *                  только у BTC; для USDT в TON/TRON универсальной ссылки нет).
+     */
+    private void donateCard(String title, String subtitle, final String address,
+                            final String walletUri) {
+        LinearLayout box = Ui.inner(this);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(Ui.S2);
+        box.setLayoutParams(lp);
+
+        TextView head = Ui.h2(this, title);
+        head.setTextSize(14);
+        box.addView(head);
+        TextView sub = Ui.caption(this, subtitle);
+        sub.setPadding(0, dp(2), 0, dp(Ui.S2));
+        box.addView(sub);
+
+        TextView addr = Ui.mono(this, address, 12, Ui.ACCENT);
+        addr.setPadding(0, 0, 0, dp(Ui.S2));
+        box.addView(addr);
+
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        Button copy = Ui.small(this, "Скопировать адрес");
+        copy.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                copyToClipboard(title + ": адрес", address);
+            }
+        });
+        buttons.addView(copy, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        if (walletUri != null) {
+            Button open = Ui.small(this, "Открыть в кошельке");
+            LinearLayout.LayoutParams openLp = new LinearLayout.LayoutParams(0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            openLp.leftMargin = dp(Ui.S2);
+            open.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    try {
+                        startActivity(new Intent(Intent.ACTION_VIEW,
+                                Uri.parse(walletUri + ":" + address)));
+                    } catch (Exception e) {
+                        toast("Кошелёк не найден — скопируйте адрес");
+                    }
+                }
+            });
+            buttons.addView(open, openLp);
+        }
+        box.addView(buttons);
+        add(box);
+    }
+
+    /** Копирование в буфер: одна точка, чтобы подпись буфера всегда была осмысленной. */
+    private void copyToClipboard(String label, String value) {
+        try {
+            android.content.ClipboardManager cb = (android.content.ClipboardManager)
+                    getSystemService(CLIPBOARD_SERVICE);
+            if (cb == null) return;
+            cb.setPrimaryClip(android.content.ClipData.newPlainText(label, value));
+            toast("Скопировано");
+        } catch (Throwable t) {
+            toast("Не удалось скопировать");
+        }
     }
 
     private void toast(String text) {
@@ -1198,6 +1291,17 @@ public class SettingsActivity extends Activity {
         } catch (Exception ignored) {
         }
         return sb.toString().trim();
+    }
+
+    /** Версия приложения из манифеста (не путать с версией Xray). */
+    private String appVersion() {
+        try {
+            android.content.pm.PackageInfo info = getPackageManager()
+                    .getPackageInfo(getPackageName(), 0);
+            return info.versionName == null ? "?" : info.versionName;
+        } catch (Exception e) {
+            return "?";
+        }
     }
 
     private String versionLine() {
