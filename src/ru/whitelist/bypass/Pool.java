@@ -14,21 +14,31 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * Пул рабочих конфигов с ИЗМЕРЕННОЙ скоростью.
+ * Пул рабочих конфигов с ИЗМЕРЕННОЙ скоростью — отдельно для Wi-Fi и для мобильного.
  *
- * Пул — единственный источник кандидатов для подключения. Сортировка — по скорости
- * по убыванию (приоритет скорости, а не пинга), поэтому «Подключить» всегда начинает
- * с самого быстрого живого конфига.
+ * Почему два пула. У оператора и у домашнего Wi-Fi разные блокировки, разные рабочие
+ * серверы и разные стратегии обхода. Общий пул означал, что «собранный в метро» список
+ * подсовывался дома, где половина серверов не отвечает, а хорошие домашние конфиги
+ * вытеснялись по скорости. Теперь:
+ *
+ *   files/pool_wifi.txt — замеры, сделанные в Wi-Fi;
+ *   files/pool_lte.txt  — замеры, сделанные в мобильном интернете.
+ *
+ * Методы без явной сети работают с ТЕКУЩЕЙ сетью ({@link Net#key}), поэтому поиск, сбор
+ * пула и подключение сами попадают в нужный файл. Экран «Рабочие конфиги» показывает оба
+ * пула и позволяет переключаться.
  *
  * Формат строки: <КБ/с> TAB <пинг, мс> TAB <время замера, мс> TAB <конфиг>
- * Если конфиг заработал только через DPI-обход, в строке появляется пятое поле:
- * <КБ/с> TAB <пинг> TAB <время> TAB <стратегия> TAB <конфиг> — тогда при подключении
- * берётся именно эта стратегия, а не «текущая из настроек».
+ * Если конфиг заработал только через DPI-обход, появляется пятое поле:
+ * <КБ/с> TAB <пинг> TAB <время> TAB <стратегия> TAB <конфиг>.
  */
 public final class Pool {
     private Pool() {}
 
-    private static final String FILE = "pool.txt";
+    /** Старый единый файл: при первом обращении переносим его в мобильный пул. */
+    private static final String LEGACY_FILE = "pool.txt";
+    private static final String PREFIX = "pool_";
+    private static final String SUFFIX = ".txt";
     /** Больше не держим: пул — это «десятки лучших», а не склад. */
     private static final int MAX_ENTRIES = 200;
 
@@ -66,28 +76,81 @@ public final class Pool {
         }
     }
 
-    private static File file(Context c) {
-        return new File(c.getFilesDir(), FILE);
+    // ------------------------------------------------------------------ файлы
+
+    private static String netKey(Context c) {
+        return Net.key(c);
+    }
+
+    private static File file(Context c, String net) {
+        migrateLegacy(c);
+        return new File(c.getFilesDir(), PREFIX + Net.normalize(net) + SUFFIX);
     }
 
     /**
-     * Канонические ключи конфигов, которые уже лежат в пуле.
-     * Быстрому поиску они не нужны: их проверяют только при «Собрать пул» — на случай,
-     * если конфиг перестал работать.
+     * Старый pool.txt → pool_lte.txt. Ровно один раз: раньше пул был один и собирался
+     * в основном в мобильном интернете, поэтому мобильному его и отдаём.
+     */
+    private static void migrateLegacy(Context c) {
+        try {
+            File legacy = new File(c.getFilesDir(), LEGACY_FILE);
+            File lte = new File(c.getFilesDir(), PREFIX + Net.MOBILE + SUFFIX);
+            File wifi = new File(c.getFilesDir(), PREFIX + Net.WIFI + SUFFIX);
+            if (!legacy.isFile()) return;
+            if (!lte.exists()) {
+                if (!legacy.renameTo(lte)) {
+                    copy(legacy, lte);
+                    legacy.delete();
+                }
+            } else {
+                legacy.delete();
+            }
+            if (!wifi.exists()) {
+                // Файл-пустышка: так «пул пуст» отличается от «пул ещё не заводили».
+                new FileOutputStream(wifi, false).close();
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void copy(File from, File to) {
+        try (FileInputStream in = new FileInputStream(from);
+             FileOutputStream out = new FileOutputStream(to, false)) {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        } catch (Exception ignored) {
+        }
+    }
+
+    // ------------------------------------------------------------------ чтение
+
+    /**
+     * Канонические ключи конфигов, которые уже лежат в пуле текущей сети.
+     * Быстрому поиску они не нужны: их проверяют только при «Собрать пул».
      */
     public static java.util.Set<String> keySet(Context c) {
+        return keySet(c, netKey(c));
+    }
+
+    public static java.util.Set<String> keySet(Context c, String net) {
         java.util.Set<String> out = new java.util.HashSet<>();
-        for (Entry e : load(c)) {
+        for (Entry e : load(c, net)) {
             String key = ConfigRepository.canonicalKey(e.raw);
             if (key != null && !key.isEmpty()) out.add(key);
         }
         return out;
     }
 
-    /** Все записи пула, по убыванию скорости. */
+    /** Все записи пула текущей сети, по убыванию скорости. */
     public static synchronized List<Entry> load(Context c) {
+        return load(c, netKey(c));
+    }
+
+    /** Все записи указанной сети ({@link Net#WIFI} или {@link Net#MOBILE}). */
+    public static synchronized List<Entry> load(Context c, String net) {
         List<Entry> out = new ArrayList<>();
-        File f = file(c);
+        File f = file(c, net);
         if (!f.isFile()) return out;
         try (BufferedReader r = new BufferedReader(new InputStreamReader(
                 new FileInputStream(f), StandardCharsets.UTF_8))) {
@@ -137,13 +200,19 @@ public final class Pool {
         });
     }
 
+    // ------------------------------------------------------------------ запись
+
     public static synchronized void save(Context c, List<Entry> entries) {
-        write(c, entries);
-        Prefs.setPoolBuiltAt(c, System.currentTimeMillis());
+        save(c, netKey(c), entries);
+    }
+
+    public static synchronized void save(Context c, String net, List<Entry> entries) {
+        write(c, net, entries);
+        Prefs.setPoolBuiltAt(c, net, System.currentTimeMillis());
     }
 
     /** Запись файла пула без отметки «пул собран» (удаление конфига — не сбор). */
-    private static synchronized void write(Context c, List<Entry> entries) {
+    private static synchronized void write(Context c, String net, List<Entry> entries) {
         List<Entry> copy = new ArrayList<>(entries);
         sortBySpeed(copy);
         StringBuilder sb = new StringBuilder();
@@ -153,25 +222,29 @@ public final class Pool {
             sb.append(e.kbps).append('\t')
               .append(e.pingMs).append('\t')
               .append(e.at).append('\t');
-            if (e.viaDpi()) sb.append(e.dpi).append('\t');   // пятое поле только когда нужно
+            if (e.viaDpi()) sb.append(e.dpi).append('\t');
             sb.append(e.raw).append('\n');
             n++;
         }
-        try (FileOutputStream fos = new FileOutputStream(file(c), false)) {
+        try (FileOutputStream fos = new FileOutputStream(file(c, net), false)) {
             fos.write(sb.toString().getBytes(StandardCharsets.UTF_8));
         } catch (Exception ignored) {
         }
     }
 
     /**
-     * Убрать конфиг из пула — «в урну». Вызывается, когда конфиг перестал работать:
-     * держать в пуле то, что не поднимается, бессмысленно, оно только занимает попытку.
+     * Убрать конфиг из пула текущей сети — «в урну». Вызывается, когда конфиг перестал
+     * работать: держать в пуле то, что не поднимается, бессмысленно.
      */
     public static synchronized boolean remove(Context c, String raw) {
+        return remove(c, netKey(c), raw);
+    }
+
+    public static synchronized boolean remove(Context c, String net, String raw) {
         if (raw == null || raw.trim().isEmpty()) return false;
         String key = ConfigRepository.canonicalKey(raw);
         if (key == null || key.isEmpty()) return false;
-        List<Entry> list = load(c);
+        List<Entry> list = load(c, net);
         List<Entry> out = new ArrayList<>();
         boolean removed = false;
         for (Entry e : list) {
@@ -181,21 +254,26 @@ public final class Pool {
             }
             out.add(e);
         }
-        if (removed) write(c, out);
+        if (removed) write(c, net, out);
         return removed;
     }
 
-    /** Добавить/обновить один конфиг (используется после удачного подключения и быстрого поиска). */
+    /** Добавить/обновить один конфиг в пуле текущей сети. */
     public static synchronized void remember(Context c, String raw, long kbps, long pingMs) {
         remember(c, raw, kbps, pingMs, null);
     }
 
-    /** То же, но с записью стратегии DPI-обхода, с которой конфиг заработал. */
     public static synchronized void remember(Context c, String raw, long kbps, long pingMs,
                                              String dpi) {
+        remember(c, netKey(c), raw, kbps, pingMs, dpi);
+    }
+
+    /** То же, но в явно указанную сеть (экран «Рабочие конфиги» правит оба пула). */
+    public static synchronized void remember(Context c, String net, String raw, long kbps,
+                                             long pingMs, String dpi) {
         if (raw == null || raw.trim().isEmpty() || kbps <= 0) return;
         String key = ConfigRepository.canonicalKey(raw);
-        List<Entry> list = load(c);
+        List<Entry> list = load(c, net);
         List<Entry> out = new ArrayList<>();
         for (Entry e : list) {
             if (ConfigRepository.canonicalKey(e.raw).equals(key)) continue;
@@ -203,20 +281,28 @@ public final class Pool {
         }
         out.add(new Entry(raw.trim(), kbps, pingMs < 0 ? -1 : pingMs,
                 System.currentTimeMillis(), dpi));
-        save(c, out);
+        save(c, net, out);
     }
 
     public static synchronized void clear(Context c) {
-        File f = file(c);
-        if (f.isFile()) f.delete();
-        Prefs.setPoolBuiltAt(c, 0L);
+        clear(c, netKey(c));
     }
 
-    /** Стратегия DPI-обхода, с которой этот конфиг замерен ("" — напрямую или его нет в пуле). */
+    public static synchronized void clear(Context c, String net) {
+        File f = file(c, net);
+        if (f.isFile()) f.delete();
+        Prefs.setPoolBuiltAt(c, net, 0L);
+    }
+
+    /** Стратегия DPI-обхода, с которой конфиг замерен ("" — напрямую или его нет в пуле). */
     public static String dpiFor(Context c, String raw) {
+        return dpiFor(c, netKey(c), raw);
+    }
+
+    public static String dpiFor(Context c, String net, String raw) {
         String key = ConfigRepository.canonicalKey(raw);
         if (key == null) return "";
-        for (Entry e : load(c)) {
+        for (Entry e : load(c, net)) {
             if (key.equals(ConfigRepository.canonicalKey(e.raw))) return e.dpi;
         }
         return "";
@@ -226,8 +312,16 @@ public final class Pool {
         return load(c).size();
     }
 
+    public static int count(Context c, String net) {
+        return load(c, net).size();
+    }
+
     public static long bestKbps(Context c) {
-        List<Entry> list = load(c);
+        return bestKbps(c, netKey(c));
+    }
+
+    public static long bestKbps(Context c, String net) {
+        List<Entry> list = load(c, net);
         return list.isEmpty() ? -1 : list.get(0).kbps;
     }
 }

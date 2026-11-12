@@ -1,0 +1,5 @@
+• "Working configs" is now the first settings tab. Every config has a "Connect to this config" button: exactly the server you picked, no cycling through the rest.
+• The pool is kept separately for Wi-Fi and for mobile data — blockings differ, and connecting always uses the current network's pool. DPI strategies are split the same way.
+• New "DPI only" tab: circumvention without a VPN server for YouTube and Discord, with its own strategy and probe URLs.
+• Configs can be pasted from the clipboard — not just imported from a file; duplicates and dead servers are filtered exactly as during pool building.
+• Home screen redesigned for OLED: pure black background, one large button, console behind a "Log" button, and a single row of small actions one button tall.

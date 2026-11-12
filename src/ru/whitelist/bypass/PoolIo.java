@@ -47,11 +47,17 @@ public final class PoolIo {
 
     /** Текст для экспорта: по одному конфигу на строку, по убыванию скорости. */
     public static String exportText(Context c) {
+        return exportText(c, Net.key(c));
+    }
+
+    /** Экспорт пула конкретной сети: у Wi-Fi и мобильного они разные. */
+    public static String exportText(Context c, String net) {
         StringBuilder sb = new StringBuilder();
-        sb.append("# Обход Белых Списков: рабочие конфиги (")
-                .append(Pool.count(c)).append(" шт.)\n");
-        sb.append("# Формат: одна ссылка на строку. Импорт: Настройки → Пул → Импорт .txt\n");
-        for (Pool.Entry e : Pool.load(c)) {
+        sb.append("# Обход Белых Списков: рабочие конфиги, ")
+                .append(Net.label(net)).append(" (").append(Pool.count(c, net)).append(" шт.)\n");
+        sb.append("# Формат: одна ссылка на строку. Импорт: Настройки → Рабочие → «Вставить "
+                + "из буфера» или Данные → Импорт .txt\n");
+        for (Pool.Entry e : Pool.load(c, net)) {
             sb.append(e.raw).append('\n');
         }
         return sb.toString();
@@ -59,8 +65,18 @@ public final class PoolIo {
 
     /** Импорт целиком: дедупликация → пинг → скорость → только рабочие в пул. */
     public static Result importText(Context c, String text, Log log) {
+        return importText(c, Net.key(c), text, log);
+    }
+
+    /**
+     * То же, но в конкретный пул (Wi-Fi или мобильный). Так «Вставить из буфера» на
+     * вкладке «Рабочие» кладёт конфиги в тот пул, который сейчас открыт, а не в тот,
+     * к которому телефон случайно подключён.
+     */
+    public static Result importText(Context c, String net, String text, Log log) {
+        final String target = Net.normalize(net);
         final Result res = new Result();
-        java.util.Set<String> inPool = Pool.keySet(c);
+        java.util.Set<String> inPool = Pool.keySet(c, target);
         Map<String, ProxyConfig> unique = new LinkedHashMap<>();
         for (String line : (text == null ? "" : text).split("\\r?\\n")) {
             if (ConfigRepository.isCancelled() || res.cancelled) break;
@@ -83,7 +99,7 @@ public final class PoolIo {
             }
             unique.put(key, p);
         }
-        say(log, "Файл: " + res.inFile + " строк, дублей " + res.duplicates
+        say(log, "Строк: " + res.inFile + ", дублей " + res.duplicates
                 + ", несовместимых " + res.unsupported + ", к проверке " + unique.size());
         if (unique.isEmpty()) {
             say(log, "Проверять нечего");
@@ -162,7 +178,7 @@ public final class PoolIo {
         }
 
         // --- 3) в пул: старое + новое, без дублей
-        List<Pool.Entry> merged = new ArrayList<>(Pool.load(c));
+        List<Pool.Entry> merged = new ArrayList<>(Pool.load(c, target));
         java.util.Set<String> mergedKeys = new java.util.HashSet<>();
         for (Pool.Entry e : merged) mergedKeys.add(ConfigRepository.canonicalKey(e.raw));
         synchronized (passed) {
@@ -174,9 +190,11 @@ public final class PoolIo {
                 }
             }
         }
-        Pool.save(c, merged);
-        say(log, "В пул добавлено " + res.added + ", всего в пуле " + Pool.count(c)
-                + (Pool.bestKbps(c) > 0 ? ", лучший " + Prefs.speedText(Pool.bestKbps(c)) : ""));
+        Pool.save(c, target, merged);
+        say(log, "В пул «" + Net.label(target) + "» добавлено " + res.added
+                + ", всего в пуле " + Pool.count(c, target)
+                + (Pool.bestKbps(c, target) > 0
+                        ? ", лучший " + Prefs.speedText(Pool.bestKbps(c, target)) : ""));
         return res;
     }
 

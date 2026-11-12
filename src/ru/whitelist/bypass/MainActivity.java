@@ -40,8 +40,6 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class MainActivity extends Activity {
 
-    private static final int REQ_VPN = 100;
-
     private static final int BG = 0xFF000000;
     private static final int SURFACE = 0xFF0A0E13;
     private static final int SURFACE2 = 0xFF121A22;
@@ -73,7 +71,9 @@ public class MainActivity extends Activity {
     /** Полный лог: в консоль попадает последнее, но история остаётся — её можно листать. */
     private final StringBuilder logBuffer = new StringBuilder();
     private static final int LOG_MAX_CHARS = 40000;
-    private Button powerButton, btnQuick, btnPool;
+    private Button powerButton, btnQuick, btnPool, btnWorkers, btnDpi, btnConsole;
+    private LinearLayout consoleCard;
+    private boolean consoleOpen = false;
     private View btnSettings;
     private BroadcastReceiver receiver;
 
@@ -136,13 +136,8 @@ public class MainActivity extends Activity {
         root.addView(Ui.header(this, "Обход Белых Списков",
                 "VPN · VLESS · скорость вместо пинга", btnSettings));
 
-        // ---- главная карточка: состояние + большая кнопка
-        LinearLayout hero = Ui.card(this);
-        LinearLayout.LayoutParams heroLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        heroLp.topMargin = dp(18);
-        hero.setLayoutParams(heroLp);
-
+        // ---- состояние: только текст на чёрном. Карточка здесь не нужна: она съедала
+        // чёрный фон, а на OLED именно фон и экономит батарею.
         LinearLayout statusRow = new LinearLayout(this);
         statusRow.setOrientation(LinearLayout.HORIZONTAL);
         statusRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -154,13 +149,17 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         detailLp.leftMargin = dp(10);
         statusRow.addView(statusDetail, detailLp);
-        hero.addView(statusRow);
+        LinearLayout.LayoutParams statusLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        statusLp.topMargin = dp(20);
+        root.addView(statusRow, statusLp);
 
+        // ---- главная кнопка: единственный крупный элемент экрана
         LinearLayout powerWrap = new LinearLayout(this);
         powerWrap.setGravity(Gravity.CENTER_HORIZONTAL);
         LinearLayout.LayoutParams wrapLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        wrapLp.topMargin = dp(18);
+        wrapLp.topMargin = dp(24);
         powerWrap.setLayoutParams(wrapLp);
 
         powerButton = new Button(this);
@@ -176,108 +175,101 @@ public class MainActivity extends Activity {
         powerButton.setMinimumHeight(0);
         powerButton.setStateListAnimator(null);
         powerButton.setBackgroundTintList(null);
-        int powerSize = dp(168);
+        int powerSize = dp(176);
         powerButton.setLayoutParams(new LinearLayout.LayoutParams(powerSize, powerSize));
         powerButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { toggleConnection(); }
         });
         powerWrap.addView(powerButton);
-        hero.addView(powerWrap);
+        root.addView(powerWrap);
 
         powerHint = Ui.caption(this, "Нажмите, чтобы подключиться");
         powerHint.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams hintLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        hintLp.topMargin = dp(14);
+        hintLp.topMargin = dp(16);
         powerHint.setLayoutParams(hintLp);
-        hero.addView(powerHint);
-        root.addView(hero);
-        stylePowerButton("off");
+        root.addView(powerHint);
 
-        // ---- действия: две равные по весу кнопки, каждая со своей подписью
-        LinearLayout actionsCard = Ui.card(this);
-        LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(
+        // ---- пул: одна строка. Цифры — на главном, подробности и выбор конфига — в «Рабочих»
+        poolText = Ui.caption(this, "Рабочий пул: пусто");
+        poolText.setTextColor(Ui.TEXT);
+        poolText.setGravity(Gravity.CENTER);
+        poolText.setBackground(Ui.shape(0x00000000, 0x00000000, 0, Ui.R_PILL, this));
+        poolText.setPadding(dp(12), dp(12), dp(12), dp(12));
+        poolText.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                startActivity(new Intent(MainActivity.this, PoolActivity.class));
+            }
+        });
+        LinearLayout.LayoutParams poolTextLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        actionsLp.topMargin = dp(16);
-        actionsCard.setLayoutParams(actionsLp);
-        actionsCard.addView(Ui.overline(this, "Действия"));
+        poolTextLp.topMargin = dp(18);
+        poolText.setLayoutParams(poolTextLp);
+        root.addView(poolText);
 
-        btnQuick = Ui.secondary(this, "Быстрый поиск");
+        // ---- вспомогательные действия: одна линейка высотой с одну кнопку.
+        // Раньше это были две большие кнопки с подписями и отдельная карточка пула —
+        // на главном экране они занимали пол-экрана, хотя нужны редко.
+        LinearLayout quickRow = new LinearLayout(this);
+        quickRow.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams quickRowLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        quickRowLp.topMargin = dp(20);
+        quickRow.setLayoutParams(quickRowLp);
+
+        btnQuick = railButton("Поиск");
         btnQuick.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 if (searching) { cancelSearch(); return; }
                 startQuickSearch();
             }
         });
-        LinearLayout.LayoutParams quickLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        quickLp.topMargin = dp(10);
-        quickLp.bottomMargin = dp(4);
-        actionsCard.addView(btnQuick, quickLp);
-        actionsCard.addView(Ui.caption(this,
-                "Найти один рабочий VPN и подключиться к нему. Быстро, но без выбора."));
+        quickRow.addView(btnQuick, railLp(0));
 
-        btnPool = Ui.secondary(this, "Собрать пул");
+        btnPool = railButton("Пул");
         btnPool.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 if (searching) { cancelSearch(); return; }
                 startBuildPool();
             }
         });
-        LinearLayout.LayoutParams poolBtnLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        poolBtnLp.topMargin = dp(14);
-        poolBtnLp.bottomMargin = dp(4);
-        actionsCard.addView(btnPool, poolBtnLp);
-        actionsCard.addView(Ui.caption(this,
-                "Обновить все списки из источников и замерить скорость у живых. Долго, зато "
-                        + "есть из чего выбирать."));
-        root.addView(actionsCard);
+        quickRow.addView(btnPool, railLp(1));
 
-        // ---- карточка пула: цифры и переход в «Рабочие конфиги»
-        LinearLayout card = Ui.card(this);
-        LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        cardLp.topMargin = dp(16);
-        card.setLayoutParams(cardLp);
-
-        LinearLayout poolHead = new LinearLayout(this);
-        poolHead.setOrientation(LinearLayout.HORIZONTAL);
-        poolHead.setGravity(Gravity.CENTER_VERTICAL);
-        TextView poolTitle = Ui.h2(this, "Рабочий пул");
-        poolHead.addView(poolTitle, new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        TextView chevron = new TextView(this);
-        chevron.setText("›");
-        chevron.setTextSize(22);
-        chevron.setTextColor(Ui.TEXT_DIM);
-        poolHead.addView(chevron);
-        card.addView(poolHead);
-
-        poolText = Ui.caption(this, "Пул пуст");
-        LinearLayout.LayoutParams poolTextLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        poolTextLp.topMargin = dp(6);
-        poolText.setLayoutParams(poolTextLp);
-        card.addView(poolText);
-
-        card.setOnClickListener(new View.OnClickListener() {
+        btnWorkers = railButton("Рабочие");
+        btnWorkers.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                if (Pool.count(MainActivity.this) == 0) {
-                    toast("Пул пуст — нажмите «Собрать пул»");
-                    return;
-                }
                 startActivity(new Intent(MainActivity.this, PoolActivity.class));
             }
         });
-        root.addView(card);
+        quickRow.addView(btnWorkers, railLp(2));
 
-        // ---- журнал: то, что раньше было «простынёй текста» внизу экрана
-        LinearLayout logCard = Ui.card(this);
-        LinearLayout.LayoutParams logCardLp = new LinearLayout.LayoutParams(
+        btnDpi = railButton("DPI");
+        btnDpi.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                if (BypassVpnService.isRunning() || BypassVpnService.isConnecting()) {
+                    toast("Сначала отключите текущее подключение");
+                    return;
+                }
+                VpnStart.connectDpiOnly(MainActivity.this);
+            }
+        });
+        quickRow.addView(btnDpi, railLp(3));
+
+        btnConsole = railButton("Журнал");
+        btnConsole.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { toggleConsole(); }
+        });
+        quickRow.addView(btnConsole, railLp(4));
+        root.addView(quickRow);
+
+        // ---- консоль: скрыта, пока её не открыли кнопкой
+        consoleCard = Ui.card(this);
+        LinearLayout.LayoutParams consoleLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        logCardLp.topMargin = dp(16);
-        logCard.setLayoutParams(logCardLp);
+        consoleLp.topMargin = dp(16);
+        consoleCard.setLayoutParams(consoleLp);
+        consoleCard.setVisibility(View.GONE);
 
         LinearLayout logHead = new LinearLayout(this);
         logHead.setOrientation(LinearLayout.HORIZONTAL);
@@ -289,7 +281,7 @@ public class MainActivity extends Activity {
             @Override public void onClick(View v) { copyLogToClipboard(); }
         });
         logHead.addView(copyLog);
-        logCard.addView(logHead);
+        consoleCard.addView(logHead);
 
         logText = Ui.mono(this, "Лог: готов", 11, Ui.TEXT_DIM);
         logScroll = new ScrollView(this);
@@ -301,16 +293,16 @@ public class MainActivity extends Activity {
         logScroll.setBackground(Ui.shape(Ui.BG, Ui.STROKE, 1, Ui.R_MD, this));
         logScroll.setPadding(dp(10), dp(10), dp(10), dp(10));
         LinearLayout.LayoutParams logLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(150));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(200));
         logLp.topMargin = dp(8);
         logScroll.setLayoutParams(logLp);
-        logCard.addView(logScroll);
-        root.addView(logCard);
+        consoleCard.addView(logScroll);
+        root.addView(consoleCard);
 
         // ---- подвал: версия и напоминание про уведомление
         TextView footer = Ui.caption(this, versionLine()
                 + "\nВ уведомлении — «Пауза», «Переключить» и «Остановить».");
-        footer.setPadding(dp(4), dp(18), dp(4), 0);
+        footer.setPadding(dp(4), dp(24), dp(4), 0);
         root.addView(footer);
 
         registerStatusReceiver();
@@ -318,6 +310,38 @@ public class MainActivity extends Activity {
         PermissionsHelper.requestOnce(this);
         handleStatusIntent(getIntent());
         refreshPoolCard();
+    }
+
+    /** Кнопка вспомогательной линейки: мельче основной, без «карточки» вокруг. */
+    private Button railButton(String label) {
+        Button b = Ui.small(this, label);
+        b.setTextSize(12);
+        b.setTextColor(Ui.TEXT);
+        b.setMinHeight(0);
+        b.setMinimumHeight(0);
+        return b;
+    }
+
+    private LinearLayout.LayoutParams railLp(int index) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        if (index > 0) lp.leftMargin = dp(5);
+        return lp;
+    }
+
+    /** Консоль открывается кнопкой «Журнал» и закрывается повторным нажатием. */
+    private void toggleConsole() {
+        setConsole(!consoleOpen);
+    }
+
+    private void setConsole(boolean open) {
+        consoleOpen = open;
+        if (consoleCard != null) consoleCard.setVisibility(open ? View.VISIBLE : View.GONE);
+        if (btnConsole != null) btnConsole.setTextColor(open ? Ui.ACCENT : Ui.TEXT);
+        if (open && logScroll != null) {
+            logScroll.post(new Runnable() {
+                @Override public void run() { logScroll.fullScroll(View.FOCUS_DOWN); }
+            });
+        }
     }
 
     @Override
@@ -424,8 +448,8 @@ public class MainActivity extends Activity {
 
     /** Строка версии для подвала: «Обход Белых Списков 0.1.11 (21)». */
     private String versionLine() {
-        String name = "0.1.12";
-        long code = 22;
+        String name = "0.1.13";
+        long code = 23;
         try {
             android.content.pm.PackageInfo info = getPackageManager()
                     .getPackageInfo(getPackageName(), 0);
@@ -470,33 +494,14 @@ public class MainActivity extends Activity {
             return;
         }
         log("Запускаю туннель…");
-        Intent prepareIntent = VpnService.prepare(this);
-        if (prepareIntent != null) {
-            startActivityForResult(prepareIntent, REQ_VPN);
-        } else {
-            startVpnService();
-        }
+        VpnStart.connect(this);
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQ_VPN) {
-            if (resultCode == RESULT_OK) {
-                startVpnService();
-            } else {
-                toast("Нужно разрешение на VPN-подключение");
-            }
-        }
-    }
-
-    private void startVpnService() {
-        Intent i = new Intent(this, BypassVpnService.class);
-        i.setAction(BypassVpnService.ACTION_START);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(i);
-        } else {
-            startService(i);
+        if (VpnStart.handleResult(this, requestCode, resultCode)) {
+            if (resultCode != RESULT_OK) toast("Нужно разрешение на VPN-подключение");
         }
     }
 
@@ -542,8 +547,10 @@ public class MainActivity extends Activity {
     private void refreshConnectionUi(String state, String detail, String mode) {
         if (state == null) return;
         boolean tor = BypassVpnService.MODE_TOR.equals(mode) || BypassVpnService.isTorMode();
+        boolean dpi = BypassVpnService.MODE_DPI.equals(mode) || BypassVpnService.isDpiMode();
         if ("on".equals(state)) {
-            setStatus(tor ? "● Tor-мосты" : "● Подключено", tor ? Ui.TOR : Ui.ACCENT);
+            if (dpi) setStatus("● Только DPI", Ui.INFO);
+            else setStatus(tor ? "● Tor-мосты" : "● Подключено", tor ? Ui.TOR : Ui.ACCENT);
             stylePowerButton(tor ? "tor" : "on");
             if (detail != null && !detail.isEmpty()) log("Подключено: " + detail);
             applyRunningUi(true);
@@ -555,13 +562,15 @@ public class MainActivity extends Activity {
             applyRunningUi(true);
             refreshPoolCard();
         } else if ("connecting".equals(state)) {
-            setStatus(tor ? "● Tor-мосты…" : "● Подключение…", tor ? Ui.TOR : Ui.WARN);
+            if (dpi) setStatus("● DPI-обход…", Ui.INFO);
+            else setStatus(tor ? "● Tor-мосты…" : "● Подключение…", tor ? Ui.TOR : Ui.WARN);
             stylePowerButton(tor ? "tor-connecting" : "connecting");
             if (detail != null) log(detail);
         } else if ("error".equals(state)) {
             setStatus("● Ошибка", Ui.DANGER);
             stylePowerButton("error");
             if (detail != null) log("Ошибка: " + detail);
+            setConsole(true);            // ошибку надо показать, а не спрятать в закрытой консоли
             applyRunningUi(false);
             refreshPoolCard();
         } else if ("off".equals(state)) {
@@ -593,24 +602,26 @@ public class MainActivity extends Activity {
                 final int n = Pool.count(MainActivity.this);
                 final long best = Pool.bestKbps(MainActivity.this);
                 final long at = Prefs.poolBuiltAt(MainActivity.this);
+                final String netLabel = Net.label(MainActivity.this);
                 final String active = Prefs.currentName(MainActivity.this);
                 final int min = Prefs.minSpeedKbps(MainActivity.this);
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         if (poolText == null) return;
                         if (n == 0) {
-                            poolText.setText("Пусто. «Подключить» найдёт первый рабочий сам, "
-                                    + "а «Собрать пул» — запас на будущее.");
+                            poolText.setText("Пул «" + netLabel + "» пуст. «Подключить» найдёт "
+                                    + "рабочий сам, «Пул» — запас на будущее.");
                             return;
                         }
                         StringBuilder sb = new StringBuilder();
-                        sb.append(n).append(n == 1 ? " конфиг" : " конфигов")
+                        sb.append(netLabel).append(": ")
+                          .append(n).append(n == 1 ? " конфиг" : " конфигов")
                           .append(" · лучший ").append(Prefs.speedText(best))
                           .append("\nСобран ").append(dateStr(at));
                         if (!active.isEmpty()) {
                             sb.append(" · активный ").append(truncate(active, 28));
                         }
-                        sb.append("\nНажмите, чтобы проверить: пинг, перемер, удаление");
+                        sb.append("\nНажмите, чтобы выбрать конфиг вручную");
                         poolText.setText(sb.toString());
                     }
                 });
@@ -916,7 +927,7 @@ public class MainActivity extends Activity {
                     // запоминается в пул вместе со стратегией — при подключении возьмём её.
                     if (!ConfigRepository.isCancelled() && Prefs.desyncLine(MainActivity.this)
                             && measuredOk.get() < POOL_ENOUGH) {
-                        final String strategy = Prefs.dpiStrategy(MainActivity.this);
+                        final String strategy = Prefs.dpiStrategyFor(MainActivity.this);
                         java.util.Set<String> okKeys = new java.util.HashSet<>();
                         synchronized (found) {
                             for (Pool.Entry e : found) {
@@ -1039,8 +1050,8 @@ public class MainActivity extends Activity {
         // Раньше здесь стояло setEnabled(!busy) — из-за этого остановить поиск было нельзя.
         btnQuick.setEnabled(true);
         btnPool.setEnabled(true);
-        btnQuick.setText(busy ? "■ Остановить поиск" : "Быстрый поиск");
-        btnPool.setText(busy ? "■ Остановить сбор" : "Собрать пул");
+        btnQuick.setText(busy ? "■ Поиск" : "Поиск");
+        btnPool.setText(busy ? "■ Пул" : "Пул");
         btnQuick.setTextColor(busy ? Ui.DANGER : Ui.TEXT);
         btnPool.setTextColor(busy ? Ui.DANGER : Ui.TEXT);
         if (!busy) refreshPoolCard();

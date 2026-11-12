@@ -45,9 +45,17 @@ public class BypassVpnService extends VpnService {
     public static final String EXTRA_STATE = "state";    // off | connecting | on | error
     public static final String EXTRA_DETAIL = "detail";
     /** Каким каналом поднят туннель: xray (конфиг из пула) или tor (резервные мосты). */
-    public static final String EXTRA_MODE = "mode";      // xray | tor
+    public static final String EXTRA_MODE = "mode";      // xray | tor | dpi
     public static final String MODE_XRAY = "xray";
     public static final String MODE_TOR = "tor";
+    /** Режим «только DPI»: локальный обход без VPN-сервера (YouTube, Discord). */
+    public static final String MODE_DPI = "dpi";
+    /** Каким режимом стартовать: по умолчанию — обычный VPN (xray). */
+    public static final String EXTRA_START_MODE = "start_mode";
+    /** Подключаться ровно к этому конфигу, а не перебирать пул (выбор в списке). */
+    public static final String EXTRA_FORCE_RAW = "force_raw";
+    /** Подключиться к конкретному конфигу из списка рабочих. */
+    public static final String ACTION_CONNECT_RAW = "ru.whitelist.bypass.action.CONNECT_RAW";
 
     private static final String CHANNEL_ID = "bypass_vpn";
     private static final int NOTIFICATION_ID = 1001;
@@ -82,6 +90,8 @@ public class BypassVpnService extends VpnService {
     /** xray | tor — каким каналом сейчас работает туннель. */
     public static String currentMode() { return currentMode; }
     public static boolean isTorMode() { return MODE_TOR.equals(currentMode); }
+    /** Сейчас работает режим «только DPI» (без VPN-сервера). */
+    public static boolean isDpiMode() { return MODE_DPI.equals(currentMode); }
     /** Идёт попытка подключения (сервис занят поиском/проверкой). */
     public static boolean isConnecting() { return connectingFlag; }
     /** Туннель на паузе: VPN снят, трафик идёт напрямую. */
@@ -96,6 +106,12 @@ public class BypassVpnService extends VpnService {
     private Thread monitorThread;
     private PowerManager.WakeLock wakeLock;
     private volatile String lastError = "";
+    /** Подключение к конкретному конфигу (выбор пользователя): пул не перебираем. */
+    private volatile String forcedRaw = null;
+    /** Режим «только DPI»: TUN смотрит в локальный ciadpi, ядро Xray не запускается. */
+    private volatile boolean dpiOnly = false;
+    /** Порт локального SOCKS ciadpi в режиме «только DPI». */
+    private volatile int dpiOnlyPort = 0;
 
     // ------------------------------------------------------------------ жизненный цикл
 
@@ -152,19 +168,36 @@ public class BypassVpnService extends VpnService {
             resumeTunnel();
             return START_NOT_STICKY;
         }
-        if (ACTION_START.equals(action)) {
-            if (running.get() || tun != null) resetEngine(); // повторный старт = перезапуск
-            dpiAutotuned = false;
-            torMode = false;
-            currentMode = MODE_XRAY;
-            localSocksPort = XRAY_PORT;
-            stopRequested.set(false);
-            ConfigRepository.clearCancel();
-            lastError = "";
-            startForegroundCompat();
-            sendStatus("connecting", "Запуск…");
+        if (ACTION_CONNECT_RAW.equals(action)) {
+            if (running.get() || tun != null) resetEngine();
+            final String raw = intent.getStringExtra(EXTRA_FORCE_RAW);
+            if (raw == null || raw.trim().isEmpty()) {
+                sendStatus("error", "Пустой конфиг — нечего подключать");
+                return START_NOT_STICKY;
+            }
+            prepareStart(null, raw.trim());
             Thread starter = new Thread(new Runnable() {
-                @Override public void run() { startWorker(); }
+                @Override public void run() {
+                    // Один конкретный конфиг: ни перебора пула, ни резерва Tor.
+                    forcedRaw = raw.trim();
+                    startWorker();
+                }
+            }, "bypass-connect-raw");
+            starter.setDaemon(true);
+            starter.start();
+            return START_NOT_STICKY;
+        }
+        if (ACTION_START.equals(action)) {
+            final String startMode = intent.getStringExtra(EXTRA_START_MODE);
+            final String raw = intent.getStringExtra(EXTRA_FORCE_RAW);
+            prepareStart(startMode, raw);
+            sendStatus("connecting", MODE_DPI.equals(startMode)
+                    ? "Поднимаю DPI-обход…" : "Запуск…");
+            Thread starter = new Thread(new Runnable() {
+                @Override public void run() {
+                    if (dpiOnly) startDpiWorker();
+                    else startWorker();
+                }
             }, "bypass-start");
             starter.setDaemon(true);
             starter.start();
@@ -174,14 +207,94 @@ public class BypassVpnService extends VpnService {
 
     // ------------------------------------------------------------------ запуск
 
+    /** Общая подготовка запуска: сброс прошлого состояния, режим, принудительный конфиг. */
+    private void prepareStart(String startMode, String raw) {
+        if (running.get() || tun != null) resetEngine();   // повторный старт = перезапуск
+        dpiAutotuned = false;
+        dpiOnly = MODE_DPI.equals(startMode);
+        forcedRaw = raw;
+        torMode = false;
+        currentMode = dpiOnly ? MODE_DPI : MODE_XRAY;
+        localSocksPort = XRAY_PORT;
+        stopRequested.set(false);
+        ConfigRepository.clearCancel();
+        lastError = "";
+        startForegroundCompat();
+    }
+
+    /**
+     * Режим «только DPI»: без VPN-сервера, силами одного ciadpi.
+     *
+     * Зачем: у оператора часть сервисов не заблокирована, а замедлена (YouTube) или
+     * обрезана (Discord). Для них не нужен чужой сервер — достаточно развалить DPI
+     * на первых пакетах TLS. TUN ведём в локальный SOCKS ciadpi, имена резолвит он же
+     * (mapdns, как в режиме Tor), чтобы не зависеть от UDP.
+     */
+    private void startDpiWorker() {
+        try {
+            String strategy = Prefs.dpiOnlyStrategy(this);
+            sendStatus("connecting", "DPI-обход: " + DpiStrategies.shorten(strategy));
+            int port = DesyncLine.start(strategy, "www.youtube.com");
+            if (port <= 0) {
+                fail("DPI-обход не поднялся. Проверьте стратегию на вкладке «Только DPI»");
+                return;
+            }
+            dpiOnlyPort = port;
+            boolean answered = false;
+            for (String url : Prefs.dpiOnlyUrls(this)) {
+                if (stopRequested.get()) break;
+                if (NetChecker.httpCheckThroughSocks(url, "127.0.0.1", port,
+                        Prefs.gateTimeoutMs(this))) {
+                    answered = true;
+                    break;
+                }
+            }
+            if (!answered) {
+                DesyncLine.stop();
+                fail("Через DPI-обход не открылся ни один адрес. Подберите другую стратегию "
+                        + "(вкладка «Только DPI»).");
+                return;
+            }
+            tun = establishTun(TorTunnel.DNS);
+            if (tun == null) {
+                DesyncLine.stop();
+                fail("Не удалось создать TUN (VPN не разрешён?)");
+                return;
+            }
+            localSocksPort = port;
+            currentSocksPort = port;
+            startTunnel(port, true);
+            running.set(true);
+            acquireWakeLock();
+            currentDetail = "Только DPI · " + DpiStrategies.shorten(strategy);
+            sendStatus("on", currentDetail);
+            Log.i(TAG, "режим «только DPI» поднят на порту " + port);
+        } catch (Throwable t) {
+            Log.e(TAG, "режим «только DPI» не запустился", t);
+            fail(t.getMessage() != null ? t.getMessage() : "Ошибка запуска");
+        }
+    }
+
     private void startWorker() {
         try {
-            List<Pool.Entry> candidates = connectCandidates(MAX_ATTEMPTS);
-            if (candidates.isEmpty()) {
-                sendStatus("connecting", "Пул пуст — ищу первый рабочий конфиг…");
-                candidates = entriesOf(quickFind());
+            final boolean forced = forcedRaw != null && !forcedRaw.trim().isEmpty();
+            List<Pool.Entry> candidates;
+            if (forced) {
+                candidates = candidatesForced(forcedRaw.trim());
+                sendStatus("connecting", "Подключаюсь к выбранному конфигу…");
+            } else {
+                candidates = connectCandidates(MAX_ATTEMPTS);
+                if (candidates.isEmpty()) {
+                    sendStatus("connecting", "Пул пуст — ищу первый рабочий конфиг…");
+                    candidates = entriesOf(quickFind());
+                }
             }
             if (candidates.isEmpty()) {
+                if (forced) {
+                    fail("Выбранный конфиг не разобрался — строка повреждена или схема не "
+                            + "поддерживается ядром.");
+                    return;
+                }
                 if (tryTorFallback("Рабочих конфигов нет")) return;
                 fail("Рабочих конфигов нет. Нажмите «Собрать пул» (обновит списки и замерит скорость).");
                 return;
@@ -221,10 +334,17 @@ public class BypassVpnService extends VpnService {
                     if (!up && Prefs.desyncLine(this)) {
                         sendStatus("connecting", "Попытка " + attempt + "/" + total
                                 + " с DPI-обходом (один раз): " + truncate(cfg.name, 30));
-                        up = activate(cfg, Prefs.dpiStrategy(this));
+                        up = activate(cfg, Prefs.dpiStrategyFor(this));
                     }
                 }
                 if (up) break;
+                if (forced) {
+                    // Пользователь выбрал конфиг руками: не наказываем его за это —
+                    // ни из пула, ни в чёрный список. Просто честно сообщаем причину.
+                    fail("Выбранный конфиг не поднялся: "
+                            + (lastError.isEmpty() ? "нет данных" : lastError));
+                    return;
+                }
                 // Ни напрямую, ни с обходом — значит он больше не рабочий:
                 // в урну (из пула) и в чёрный список, чтобы неделю его не трогать.
                 discard(cfg, lastError);
@@ -380,6 +500,38 @@ public class BypassVpnService extends VpnService {
         return out;
     }
 
+    /**
+     * Один конкретный конфиг (выбор в списке рабочих) в виде кандидата.
+     *
+     * Берём запись из пула текущей сети, чтобы сохранить стратегию DPI, с которой этот
+     * конфиг был замерен. Если записи нет (конфиг подключили из буфера), собираем
+     * кандидата из самой строки без стратегии.
+     */
+    private List<Pool.Entry> candidatesForced(String raw) {
+        List<Pool.Entry> out = new ArrayList<>();
+        String key = ConfigRepository.canonicalKey(raw);
+        if (key != null) {
+            // Ищем в обоих пулах: конфиг могли выбрать на вкладке другой сети. Сначала
+            // текущая сеть — у неё может быть свежий замер, — потом вторая.
+            String mine = Net.key(this);
+            String other = Net.WIFI.equals(mine) ? Net.MOBILE : Net.WIFI;
+            for (String net : new String[]{mine, other}) {
+                for (Pool.Entry e : Pool.load(this, net)) {
+                    String k = ConfigRepository.canonicalKey(e.raw);
+                    if (key.equals(k)) {
+                        out.add(e);
+                        return out;
+                    }
+                }
+            }
+        }
+        ProxyConfig cfg = ProxyConfig.parse(raw, "выбор", false);
+        if (cfg != null) {
+            out.add(new Pool.Entry(cfg.raw, 1, cfg.latency, System.currentTimeMillis()));
+        }
+        return out;
+    }
+
     /** Найденные «быстрым поиском» конфиги — в вид записей пула (стратегии пока нет). */
     private static List<Pool.Entry> entriesOf(List<ProxyConfig> list) {
         List<Pool.Entry> out = new ArrayList<>();
@@ -396,7 +548,10 @@ public class BypassVpnService extends VpnService {
      */
     private void discard(ProxyConfig cfg, String why) {
         if (cfg == null) return;
+        // Из обоих пулов: сломанный конфиг не должен оставаться и в пуле другой сети.
+        String mine = Net.key(this);
         boolean removed = Pool.remove(this, cfg.raw);
+        removed |= Pool.remove(this, Net.WIFI.equals(mine) ? Net.MOBILE : Net.WIFI, cfg.raw);
         // Конфиг, который ядро не примет в принципе (нет TLS, а ретранслятор выключен),
         // из пула убираем — он занимает попытку, — но в чёрный список не пишем: это
         // ограничение настроек, а не мёртвый сервер.
@@ -557,13 +712,13 @@ public class BypassVpnService extends VpnService {
                 sni = (cfg != null && cfg.host != null && !cfg.host.isEmpty()) ? cfg.host : "www.youtube.com";
             }
             String use = dpiStrategy == null ? "" : dpiStrategy.trim();
-            if (use.isEmpty()) use = Prefs.dpiStrategy(this);
+            if (use.isEmpty()) use = Prefs.dpiStrategyFor(this);
             // Автоподбор — один раз за сессию и только для «стратегии из настроек»:
             // если пришла стратегия из пула, она уже доказала, что пробивает блокировку.
-            if (Prefs.dpiAutotune(this) && !dpiAutotuned && use.equals(Prefs.dpiStrategy(this))) {
+            if (Prefs.dpiAutotune(this) && !dpiAutotuned && use.equals(Prefs.dpiStrategyFor(this))) {
                 dpiAutotuned = true;
                 sendStatus("connecting", "Подбираю стратегию обхода DPI…");
-                Log.i(TAG, "DPI: автоподбор, стартовая — " + DpiStrategies.shorten(Prefs.dpiStrategy(this)));
+                Log.i(TAG, "DPI: автоподбор, стартовая — " + DpiStrategies.shorten(Prefs.dpiStrategyFor(this)));
                 String chosen = DpiStrategies.autotune(this, sni, new DpiStrategies.Log() {
                     @Override public void line(String message) {
                         Log.i(TAG, message);
@@ -741,6 +896,11 @@ public class BypassVpnService extends VpnService {
      *                     никого не трогаем.
      */
     private void switchToNext(boolean blameCurrent) {
+        if (dpiOnly) {
+            // В режиме «только DPI» конфигов нет — переключать нечего.
+            sendStatus("on", currentDetail.isEmpty() ? "Только DPI" : currentDetail);
+            return;
+        }
         ProxyConfig previous = currentConfig;
         List<Pool.Entry> list = connectCandidates(6);
         String currentRaw = previous != null ? previous.raw : "";
@@ -760,7 +920,7 @@ public class BypassVpnService extends VpnService {
                 if (!ok) ok = activate(cfg, null);             // и один раз напрямую
             } else {
                 ok = activate(cfg, null);                      // как при замере: напрямую
-                if (!ok && Prefs.desyncLine(this)) ok = activate(cfg, Prefs.dpiStrategy(this));
+                if (!ok && Prefs.desyncLine(this)) ok = activate(cfg, Prefs.dpiStrategyFor(this));
             }
             if (ok) {
                 if (wasTor) {
@@ -841,16 +1001,17 @@ public class BypassVpnService extends VpnService {
                         startWorker();
                         return;
                     }
-                    ParcelFileDescriptor fd = establishTun(torMode ? TorTunnel.DNS : null);
+                    ParcelFileDescriptor fd = establishTun(
+                            (torMode || dpiOnly) ? TorTunnel.DNS : null);
                     if (fd == null) {
                         fail("Не удалось создать TUN после паузы (VPN не разрешён?)");
                         return;
                     }
                     tun = fd;
-                    startTunnel(localSocksPort, torMode);
+                    startTunnel(localSocksPort, torMode || dpiOnly);
                     running.set(true);
                     acquireWakeLock();
-                    startMonitor();
+                    if (!dpiOnly) startMonitor();   // в режиме DPI переключать нечего: конфига нет
                     sendStatus("on", currentDetail);
                     Log.i(TAG, "продолжение: туннель поднят снова");
                 } catch (Throwable e) {
@@ -897,6 +1058,12 @@ public class BypassVpnService extends VpnService {
             torMode = false;
             TorTunnel.stop(this);
         }
+        if (dpiOnly) {
+            DesyncLine.stop();          // линия «только DPI» живёт вне Xray
+            dpiOnly = false;
+            dpiOnlyPort = 0;
+        }
+        forcedRaw = null;
         currentMode = MODE_XRAY;
         localSocksPort = XRAY_PORT;
         currentSocksPort = -1;
@@ -986,8 +1153,9 @@ public class BypassVpnService extends VpnService {
                 .addAction(paused ? R.drawable.ic_stat_play : R.drawable.ic_stat_pause,
                         paused ? "Продолжить" : "Пауза",
                         paused ? resume : pause)
-                .addAction(R.drawable.ic_stat_stop, "Остановить", stop)
-                .addAction(R.drawable.ic_stat_switch, "Переключить", swtch);
+                .addAction(R.drawable.ic_stat_stop, "Остановить", stop);
+        // В режиме «только DPI» переключать нечего: конфига нет, линия одна.
+        if (!dpiOnly) builder.addAction(R.drawable.ic_stat_switch, "Переключить", swtch);
         return builder.build();
     }
 

@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<title>Обход Белых Списков — макет интерфейса 0.1.11</title>
+<title>Обход Белых Списков — макет интерфейса 0.1.13</title>
 <style>
   :root{
     --bg:#0B0F14; --surface:#131A24; --surface2:#1B2532; --stroke:#243040;
@@ -75,10 +75,10 @@
 </style>
 </head>
 <body>
-<h1 class="page">Макет интерфейса 0.1.11</h1>
+<h1 class="page">Макет интерфейса 0.1.13</h1>
 <p class="lead">Это <b>макет, а не скриншот</b>: он собран из тех же токенов, что теперь использует
 приложение (цвета, отступы 4/8/12/16/24, радиусы 10/16/20, шрифты 11/12/14/16/24). Тексты и
-элементы — настоящие, из кода 0.1.11. Точные размеры на телефоне зависят от плотности экрана.</p>
+элементы — настоящие, из кода 0.1.13. Точные размеры на телефоне зависят от плотности экрана.</p>
 
 <div class="row">
 
@@ -93,32 +93,25 @@
         <div class="iconbtn">⚙</div>
       </div>
 
-      <div class="card">
-        <div class="status-row">
-          <span class="chip off">● Отключено</span>
-          <div class="status-detail">—</div>
-        </div>
-        <div class="power on">Подключить</div>
-        <div class="hint">Нажмите, чтобы подключиться</div>
+      <div class="status-row" style="margin-top:20px">
+        <span class="chip off">● Отключено</span>
+        <div class="status-detail">—</div>
       </div>
 
-      <div class="card">
-        <div class="overline">Действия</div>
-        <div class="btn">Быстрый поиск</div>
-        <div class="note">Найти один рабочий VPN и подключиться к нему. Быстро, но без выбора.</div>
-        <div class="btn">Собрать пул</div>
-        <div class="note">Обновить все списки из источников и замерить скорость у живых. Долго,
-          зато есть из чего выбирать.</div>
+      <div class="power on" style="width:176px;height:176px;margin-top:24px">Подключить</div>
+      <div class="hint">Нажмите, чтобы подключиться</div>
+
+      <div class="note" style="text-align:center;font-size:13px;color:var(--text);margin-top:18px">
+        Wi-Fi: 12 конфигов · лучший 512 КБ/с<br>
+        <span style="color:var(--dim);font-size:12px">Нажмите, чтобы выбрать конфиг вручную</span>
       </div>
 
-      <div class="card">
-        <div class="row-between">
-          <div class="h2">Рабочий пул</div>
-          <div class="chev">›</div>
-        </div>
-        <div class="note" style="margin-top:6px">12 конфигов · лучший 512 КБ/с<br>
-          Собран 10.11 06:20 · активный Amsterdam-1<br>
-          Нажмите, чтобы проверить: пинг, перемер, удаление</div>
+      <div style="display:flex;gap:5px;margin-top:20px">
+        <div class="btn" style="flex:1;height:44px;font-size:12px;margin-top:0">Поиск</div>
+        <div class="btn" style="flex:1;height:44px;font-size:12px;margin-top:0">Пул</div>
+        <div class="btn" style="flex:1;height:44px;font-size:12px;margin-top:0">Рабочие</div>
+        <div class="btn" style="flex:1;height:44px;font-size:12px;margin-top:0">DPI</div>
+        <div class="btn" style="flex:1;height:44px;font-size:12px;margin-top:0">Журнал</div>
       </div>
 
       <div class="card">
@@ -129,9 +122,11 @@
         <div class="log">Подключено: Amsterdam-1 · 512 КБ/с
 канал жив: 4/4 цели
 скорость 12/12 · рабочих 12</div>
+        <div class="note">Консоль скрыта, пока её не открыли кнопкой «Журнал»; при ошибке
+          раскрывается сама.</div>
       </div>
 
-      <div class="footer">Обход Белых Списков 0.1.11 (21)<br>
+      <div class="footer">Обход Белых Списков 0.1.13 (23)<br>
         В уведомлении — «Пауза», «Переключить» и «Остановить».</div>
     </div>
     <div class="caption-phone">Главный экран</div>
@@ -149,7 +144,9 @@
       </div>
 
       <div class="tabs">
-        <div class="tab active">Списки</div>
+        <div class="tab active">Рабочие</div>
+        <div class="tab">Только DPI</div>
+        <div class="tab">Списки</div>
         <div class="tab">Обход</div>
         <div class="tab">Tor</div>
         <div class="tab">Данные</div>
@@ -179,7 +176,7 @@ http://cp.cloudflare.com/generate_204</div>
       </div>
 
       <div class="btn primary" style="margin-top:24px">Сохранить настройки</div>
-      <div class="footer">Обход Белых Списков 0.1.11 · Xray-core: 26.10.31</div>
+      <div class="footer">Обход Белых Списков 0.1.13 · Xray-core: 26.10.31</div>
     </div>
     <div class="caption-phone">Настройки</div>
   </div>
