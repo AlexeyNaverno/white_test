@@ -441,7 +441,7 @@ public final class ConfigRepository {
             conn.setConnectTimeout(connectTimeout);
             conn.setReadTimeout(readTimeout);
             conn.setInstanceFollowRedirects(true);
-            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.1.12");
+            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.1.13");
             conn.setRequestProperty("Accept", "text/plain, */*");
 
             int code;

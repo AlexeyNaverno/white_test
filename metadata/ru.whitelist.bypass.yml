@@ -30,9 +30,9 @@ RepoType: git
 Repo: https://github.com/AlexeyNaverno/white_test.git
 
 Builds:
-  - versionName: 0.1.12
-    versionCode: 22
-    commit: v0.1.12
+  - versionName: 0.1.13
+    versionCode: 23
+    commit: v0.1.13
     # Исходники ciadpi, hev-socks5-tunnel и Xray-core подключены сабмодулями.
     submodules: true
     sudo:
@@ -49,5 +49,5 @@ Builds:
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: 0.1.12
-CurrentVersionCode: 22
+CurrentVersion: 0.1.13
+CurrentVersionCode: 23

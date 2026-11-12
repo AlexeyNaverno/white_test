@@ -63,6 +63,14 @@ public final class Prefs {
     public static final String CURRENT_HOST = "current_host";
     public static final String CURRENT_PORT = "current_port";
     public static final String POOL_AT = "pool_at";
+    /** Отметки «когда собран» для каждого пула: у Wi-Fi и мобильного они свои. */
+    public static final String POOL_AT_WIFI = "pool_at_wifi";
+    public static final String POOL_AT_LTE = "pool_at_lte";
+    /** Стратегия DPI-обхода для Wi-Fi (у мобильного — общий DPI_STRATEGY). */
+    public static final String DPI_STRATEGY_WIFI = "dpi_strategy_wifi";
+    /** Режим «только DPI»: локальный обход без VPN-сервера. */
+    public static final String DPI_ONLY_STRATEGY = "dpi_only_strategy";
+    public static final String DPI_ONLY_URLS = "dpi_only_urls";
     /** Разрешать конфиги без TLS (они пойдут через локальный ретранслятор). */
     public static final String ALLOW_NO_TLS = "allow_no_tls";
 
@@ -113,6 +121,19 @@ public final class Prefs {
      * что канал годится для «всех сайтов». Остались адреса, которые блокируют
      * по SNI/IP и которые нельзя «разрешить» точечно под один сервис.
      */
+    /**
+     * Адреса для режима «только DPI».
+     *
+     * Здесь как раз Discord и YouTube: режим и нужен ровно для случая, когда канал есть,
+     * но сервисы замедлены или обрезаны. В обычных проверках (пинг, замер, канал) этих
+     * адресов нет — там нужен «интернет целиком».
+     */
+    public static final String[] DEFAULT_DPI_ONLY_URLS = {
+            "https://www.youtube.com/",
+            "https://discord.com/",
+            "https://www.instagram.com/"
+    };
+
     public static final String[] DEFAULT_DPI_TEST_URLS = {
             "https://raw.githubusercontent.com/luxxuria/harvester/main/ping_tested.txt",
             "https://www.instagram.com/",
@@ -318,6 +339,40 @@ public final class Prefs {
         return s == null || s.trim().isEmpty() ? DEFAULT_STRATEGY : s.trim();
     }
 
+    /**
+     * Стратегия DPI-обхода для конкретной сети.
+     *
+     * У мобильного оператора это общая стратегия «белых списков» (раньше она была
+     * единственной), у Wi-Fi — своя, «домашняя»: дома обход обычно не нужен, а если
+     * нужен, то другой. Пользователь может переопределить любую в настройках; пустое
+     * поле означает «по умолчанию для этой сети».
+     */
+    public static String dpiStrategyFor(Context c, String net) {
+        if (!Net.WIFI.equals(Net.normalize(net))) return dpiStrategy(c);
+        String s = get(c).getString(DPI_STRATEGY_WIFI, "");
+        if (s == null || s.trim().isEmpty()) return Presets.wifiStrategy();
+        return s.trim();
+    }
+
+    public static String dpiStrategyFor(Context c) {
+        return dpiStrategyFor(c, Net.key(c));
+    }
+
+    /** Стратегия для режима «только DPI» (без VPN-сервера). */
+    public static String dpiOnlyStrategy(Context c) {
+        String s = get(c).getString(DPI_ONLY_STRATEGY, "");
+        if (s == null || s.trim().isEmpty()) return Presets.dpiOnlyStrategy();
+        return s.trim();
+    }
+
+    public static List<String> dpiOnlyUrls(Context c) {
+        List<String> out = lines(get(c).getString(DPI_ONLY_URLS, join(DEFAULT_DPI_ONLY_URLS)));
+        if (out.isEmpty()) {
+            for (String u : DEFAULT_DPI_ONLY_URLS) out.add(u);
+        }
+        return out;
+    }
+
     public static List<String> dpiSources(Context c) {
         List<String> out = lines(get(c).getString(DPI_SOURCES, join(DEFAULT_DPI_SOURCES)));
         if (out.isEmpty()) {
@@ -342,6 +397,18 @@ public final class Prefs {
 
     public static void setDpiStrategy(Context c, String s) {
         get(c).edit().putString(DPI_STRATEGY, s == null ? "" : s.trim()).apply();
+    }
+
+    /**
+     * Запомнить стратегию для конкретной сети: на Wi-Fi — в своё поле, на мобильном —
+     * в общее. Иначе автоподбор в метро переписывал бы «домашнюю» стратегию и наоборот.
+     */
+    public static void setDpiStrategyFor(Context c, String net, String s) {
+        if (!Net.WIFI.equals(Net.normalize(net))) {
+            setDpiStrategy(c, s);
+            return;
+        }
+        get(c).edit().putString(DPI_STRATEGY_WIFI, s == null ? "" : s.trim()).apply();
     }
 
     // --- сеть ---
@@ -438,8 +505,19 @@ public final class Prefs {
 
     // --- пул ---
 
-    public static long poolBuiltAt(Context c) { return get(c).getLong(POOL_AT, 0L); }
-    public static void setPoolBuiltAt(Context c, long t) { get(c).edit().putLong(POOL_AT, t).apply(); }
+    public static long poolBuiltAt(Context c) { return poolBuiltAt(c, Net.key(c)); }
+
+    public static long poolBuiltAt(Context c, String net) {
+        String key = Net.WIFI.equals(Net.normalize(net)) ? POOL_AT_WIFI : POOL_AT_LTE;
+        return get(c).getLong(key, 0L);
+    }
+
+    public static void setPoolBuiltAt(Context c, long t) { setPoolBuiltAt(c, Net.key(c), t); }
+
+    public static void setPoolBuiltAt(Context c, String net, long t) {
+        String key = Net.WIFI.equals(Net.normalize(net)) ? POOL_AT_WIFI : POOL_AT_LTE;
+        get(c).edit().putLong(key, t).apply();
+    }
 
     /** Лимит ожидания одного моста, мс (10 с по умолчанию, настраивается). */
     public static int torBridgeWaitMs(Context c) {

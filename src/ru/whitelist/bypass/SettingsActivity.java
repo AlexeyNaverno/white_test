@@ -64,9 +64,11 @@ public class SettingsActivity extends Activity {
     private TextView dpiOut;
 
     private EditText editSources, editSpeedUrls, editMinSpeed, editThreads, editTimeout,
-            editGateTimeout, editStrategy, editVpnDns, editMonitor, editSwitchTimeout,
-            editTorBridges, editTorExtra, editTorBridgeWait, editPingTargets, editHealthUrls,
-            editLanes, editDpiSources;
+            editGateTimeout, editStrategyWifi, editStrategyLte, editVpnDns, editMonitor,
+            editSwitchTimeout, editTorBridges, editTorExtra, editTorBridgeWait, editPingTargets,
+            editHealthUrls, editLanes, editDpiSources, editDpiOnlyStrategy, editDpiOnlyUrls;
+    /** Панель рабочих конфигов на первой вкладке (та же, что на отдельном экране). */
+    private PoolPanel poolPanel;
     private Switch swDesync, swIpv6, swAutoSwitch, swBoot, swEmbedded, swDpiAutotune,
             swTorFallback, swNoTls;
 
@@ -121,6 +123,66 @@ public class SettingsActivity extends Activity {
         hostLp.topMargin = dp(Ui.S4);
         pageHost.setLayoutParams(hostLp);
         root.addView(pageHost);
+        // --- «Рабочие» — ПЕРВАЯ вкладка: раньше это был отдельный экран, до которого
+        // ещё надо было дойти. Пул у каждой сети свой, поэтому здесь же переключатель.
+        newPage("Рабочие");
+        note("Пул ведётся отдельно для Wi-Fi и для мобильного интернета: блокировки у них "
+                + "разные, и «собранный в метро» список дома только мешает. Переключатель "
+                + "сверху показывает, какой пул открыт; для подключения берётся пул той сети, "
+                + "в которой сейчас телефон.");
+        LinearLayout poolHost = new LinearLayout(this);
+        poolHost.setOrientation(LinearLayout.VERTICAL);
+        pageBox.addView(poolHost);
+        poolPanel = new PoolPanel(this, poolHost);
+        poolPanel.build();
+
+        // --- «Только DPI»: обход без VPN-сервера, ради YouTube и Discord
+        newPage("Только DPI");
+        section("Обход без VPN-сервера");
+        note("Режим для случаев, когда нужен не VPN, а именно обход DPI: YouTube, Discord, "
+                + "Instagram. Локальный ciadpi фрагментирует TLS прямо на телефоне — трафик "
+                + "идёт напрямую, без чужого сервера, и не тратит подписку на VPN. "
+                + "DNS при этом поднимается только на время работы режима.");
+        editDpiOnlyStrategy = singleField(Prefs.dpiOnlyStrategy(this));
+        label("Стратегия для режима «только DPI» (аргументы ciadpi)", Help.DPI_STRATEGY);
+        add(editDpiOnlyStrategy);
+        Button dpiOnlyReset = smallButton("Встроенная стратегия: "
+                + DpiStrategies.shorten(Presets.dpiOnlyStrategy()));
+        dpiOnlyReset.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                editDpiOnlyStrategy.setText(Presets.dpiOnlyStrategy());
+            }
+        });
+        addAction(dpiOnlyReset, "Стратегия «только DPI»", Help.DPI_STRATEGY);
+
+        editDpiOnlyUrls = multiField(Prefs.join(Prefs.dpiOnlyUrls(this)), 4);
+        label("Адреса, которые проверяет режим (по одному на строку)", Help.DPI_ONLY_URLS);
+        add(editDpiOnlyUrls);
+        note("Перед поднятием туннеля приложение проверяет эти адреса: если стратегия не "
+                + "пробивает ни один, режим не включается — иначе было бы «подключено», а "
+                + "YouTube закрыт. Через локальный обход идёт весь трафик, но не через чужой "
+                + "сервер: пакеты уходят с телефона на нужный сайт напрямую.");
+
+        Button dpiOnlyConnect = smallButton("Подключить «только DPI»");
+        dpiOnlyConnect.setTextColor(Ui.ACCENT);
+        dpiOnlyConnect.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                savePrefs();
+                VpnStart.connectDpiOnly(SettingsActivity.this);
+                toast("Запускаю режим «только DPI»");
+            }
+        });
+        addAction(dpiOnlyConnect, "Только DPI", Help.DPI_ONLY);
+
+        Button dpiOnlyStop = smallButton("Остановить");
+        dpiOnlyStop.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                VpnStart.stop(SettingsActivity.this);
+                toast("Останавливаю");
+            }
+        });
+        addAction(dpiOnlyStop, "Остановить", Help.DPI_ONLY_STOP);
+
         newPage("Списки");
 
         // --- скорость ---
@@ -197,16 +259,32 @@ public class SettingsActivity extends Activity {
         section("DPI-обход");
         swDesync = switchRow("DPI-обход линии до VPN-сервера (ciadpi) — по умолчанию включён",
                 Prefs.desyncLine(this), Help.DESYNC_LINE);
-        editStrategy = singleField(Prefs.dpiStrategy(this));
-        label("Стратегия ciadpi (аргументы командной строки)", Help.DPI_STRATEGY);
-        add(editStrategy);
-        Button recommended = smallButton("Вставить: " + Prefs.DEFAULT_STRATEGY);
-        recommended.setOnClickListener(new View.OnClickListener() {
+        note("Стратегии у Wi-Fi и мобильного разные: дома обход обычно не нужен, а в "
+                + "мобильной сети нужен «белый список». Обе можно переопределить — пустое "
+                + "поле означает «встроенная для этой сети».");
+        editStrategyWifi = singleField(Prefs.dpiStrategyFor(this, Net.WIFI));
+        label("Стратегия ciadpi для Wi-Fi (аргументы командной строки)", Help.DPI_STRATEGY);
+        add(editStrategyWifi);
+        Button recommendedWifi = smallButton("Встроенная для Wi-Fi: "
+                + DpiStrategies.shorten(Presets.wifiStrategy()));
+        recommendedWifi.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                editStrategy.setText(Prefs.DEFAULT_STRATEGY);
+                editStrategyWifi.setText(Presets.wifiStrategy());
             }
         });
-        addAction(recommended, "Стратегия по умолчанию", Help.RECOMMENDED_STRATEGY);
+        addAction(recommendedWifi, "Wi-Fi по умолчанию", Help.RECOMMENDED_STRATEGY);
+
+        editStrategyLte = singleField(Prefs.dpiStrategyFor(this, Net.MOBILE));
+        label("Стратегия ciadpi для мобильного интернета (белые списки)", Help.DPI_STRATEGY);
+        add(editStrategyLte);
+        Button recommendedLte = smallButton("Встроенная для LTE: "
+                + DpiStrategies.shorten(Prefs.DEFAULT_STRATEGY));
+        recommendedLte.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                editStrategyLte.setText(Prefs.DEFAULT_STRATEGY);
+            }
+        });
+        addAction(recommendedLte, "LTE по умолчанию", Help.RECOMMENDED_STRATEGY);
         note("Сначала всегда пробуется прямое подключение. Через ciadpi — только если оно "
                 + "не прошло (первые 3 конфига). TLS к серверу при этом фрагментируется, "
                 + "поэтому для Reality этот путь может не сработать.");
@@ -297,7 +375,8 @@ public class SettingsActivity extends Activity {
                                 });
                         runOnUiThread(new Runnable() {
                             @Override public void run() {
-                                editStrategy.setText(chosen);
+                                (Net.isWifi(SettingsActivity.this)
+                                        ? editStrategyWifi : editStrategyLte).setText(chosen);
                                 toast("Рабочая стратегия сохранена в поле выше");
                             }
                         });
@@ -435,7 +514,9 @@ public class SettingsActivity extends Activity {
         final TextView poolOut = new TextView(this);
         poolOut.setTextColor(TEXT_DIM);
         poolOut.setTextSize(12);
-        poolOut.setText("В пуле " + Pool.count(this) + " конфигов.");
+        poolOut.setText("В рабочих: Wi-Fi " + Pool.count(this, Net.WIFI)
+                + ", мобильный " + Pool.count(this, Net.MOBILE)
+                + ". Полный список и подключение — на вкладке «Рабочие».");
         add(poolOut);
         importLog = poolOut;
 
@@ -786,8 +867,17 @@ public class SettingsActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        if (poolPanel != null) poolPanel.refresh();
+    }
+
+    @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        // Разрешение VPN и выбор файла из панели рабочих приходят сюда же.
+        if (VpnStart.handleResult(this, requestCode, resultCode)) return;
+        if (poolPanel != null && poolPanel.handleActivityResult(requestCode, resultCode, data)) return;
         if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
         final Uri uri = data.getData();
         if (requestCode == REQ_EXPORT) {
@@ -937,7 +1027,10 @@ public class SettingsActivity extends Activity {
         e.putInt(Prefs.SPEED_LANES, Prefs.clamp(parseInt(editLanes, 3), 1, 4));
         e.putString(Prefs.PING_TARGETS, normalizeLines(editPingTargets.getText().toString()));
         e.putString(Prefs.HEALTH_URLS, normalizeLines(editHealthUrls.getText().toString()));
-        e.putString(Prefs.DPI_STRATEGY, editStrategy.getText().toString().trim());
+        e.putString(Prefs.DPI_STRATEGY, editStrategyLte.getText().toString().trim());
+        e.putString(Prefs.DPI_STRATEGY_WIFI, editStrategyWifi.getText().toString().trim());
+        e.putString(Prefs.DPI_ONLY_STRATEGY, editDpiOnlyStrategy.getText().toString().trim());
+        e.putString(Prefs.DPI_ONLY_URLS, normalizeLines(editDpiOnlyUrls.getText().toString()));
         e.putString(Prefs.DPI_SOURCES, normalizeLines(editDpiSources.getText().toString()));
         e.putBoolean(Prefs.DPI_AUTOTUNE, swDpiAutotune.isChecked());
         e.putString(Prefs.VPN_DNS, editVpnDns.getText().toString().trim());

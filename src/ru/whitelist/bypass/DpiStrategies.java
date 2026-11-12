@@ -60,7 +60,7 @@ public final class DpiStrategies {
     public static synchronized List<String> list(Context c) {
         Set<String> seen = new LinkedHashSet<>();
         List<String> out = new ArrayList<>();
-        String current = Prefs.dpiStrategy(c);
+        String current = Prefs.dpiStrategyFor(c);
         if (current != null && !current.trim().isEmpty()) {
             if (seen.add(current.trim())) out.add(current.trim());
         }
@@ -171,7 +171,7 @@ public final class DpiStrategies {
      * Ограничено AUTOTUNE_MAX попытками, чтобы подключение не висело.
      */
     public static String autotune(Context c, String sni, Log log) {
-        String current = Prefs.dpiStrategy(c);
+        String current = Prefs.dpiStrategyFor(c);
         int tried = 0;
         // Сначала те, что уже приносили рабочий конфиг на этой сети: их проверять дешевле,
         // чем перебирать весь список заново.
@@ -185,7 +185,7 @@ public final class DpiStrategies {
             tried++;
             if (log != null) log.line("DPI: проверяю " + shorten(st));
             if (probe(c, st, sni, PROBE_TIMEOUT_MS)) {
-                if (!st.equals(current)) Prefs.setDpiStrategy(c, st);
+                if (!st.equals(current)) Prefs.setDpiStrategyFor(c, Net.key(c), st);
                 if (log != null) log.line("DPI: подошла — " + shorten(st));
                 return st;
             }

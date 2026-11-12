@@ -122,6 +122,25 @@ public final class Presets {
 
     private static final String WIFI_STRATEGY = "--disorder 1 --auto=torst --tlsrec 1+s";
 
+    /**
+     * Стратегия «дома»: домашний Wi-Fi и бесплатные сети почти никогда не режут TLS,
+     * поэтому стратегия мягкая — без агрессивной нарезки пакетов.
+     */
+    public static String wifiStrategy() {
+        return WIFI_STRATEGY;
+    }
+
+    /**
+     * Стратегия для режима «только DPI» (без VPN-сервера).
+     *
+     * Задача другая, чем у линии до сервера: пробить замедление конкретных сервисов
+     * (YouTube, Discord) на мобильном операторе. Поэтому по умолчанию — агрессивная
+     * нарезка первых пакетов TLS, как в «белых списках».
+     */
+    public static String dpiOnlyStrategy() {
+        return Prefs.DEFAULT_STRATEGY;
+    }
+
     private static final String[] WIFI_SPEED_URLS = {
             "https://raw.githubusercontent.com/luxxuria/harvester/main/speed_tested.txt",
             "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/vless.txt",
