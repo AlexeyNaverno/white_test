@@ -700,17 +700,18 @@ public class BypassVpnService extends VpnService {
             }
             Probe.Speed speed = Probe.measureSpeed(this, XRAY_PORT,
                     Prefs.gateTimeoutMs(this), 2);
-            // Пустой 204 — тоже доказательство, что туннель работает: у «белых» конфигов
-            // это часто единственный доступный ответ. Ставим минимальную скорость, чтобы
-            // конфиг не выкидывался из пула и не уходил в чёрный список.
+            // Ответ 204 без тела доказывает только связность. Скорости в нём нет, а без
+            // скорости конфиг бесполезен: подключать «есть контакт, но качать нечего»
+            // нельзя — это тот же нерабочий VPN, только выглядит живым.
             boolean onlyAlive = !speed.ok() && speed.alive();
-            long kbps = speed.ok() ? speed.kbps
-                    : (onlyAlive ? Math.max(1, Prefs.minSpeedKbps(this)) : -1);
+            long kbps = speed.ok() ? speed.kbps : -1;
             long need = Math.max(1L, (long) (Prefs.minSpeedKbps(this) * MIN_SPEED_TOLERANCE));
             if (kbps < need) {
-                lastError = "скорость " + (kbps < 0 ? "не измерена" : Prefs.speedText(kbps))
-                        + " ниже порога " + Prefs.minSpeedText(this)
-                        + (speed.error.isEmpty() ? "" : " · " + speed.error);
+                lastError = onlyAlive
+                        ? "связность есть, скорость не измерена"
+                        : "скорость " + (kbps < 0 ? "не измерена" : Prefs.speedText(kbps))
+                                + " ниже порога " + Prefs.minSpeedText(this)
+                                + (speed.error.isEmpty() ? "" : " · " + speed.error);
                 Log.i(TAG, "конфиг " + cfg.name + ": " + lastError);
                 XrayEngine.stop();
                 return false;
@@ -721,9 +722,7 @@ public class BypassVpnService extends VpnService {
             Pool.remember(this, cfg.raw, kbps, cfg.latency, withDesync ? dpiStrategy.trim() : "");
             currentConfig = cfg;
             currentSocksPort = XRAY_PORT;
-            currentDetail = cfg.name + " · " + (onlyAlive
-                    ? "связность есть (скорость не измерена)"
-                    : kbps + " КБ/с");
+            currentDetail = cfg.name + " · " + kbps + " КБ/с";
             ok = true;
             return true;
         } catch (IllegalArgumentException e) {

@@ -1,0 +1,5 @@
+• "Connected but no measured speed" no longer counts as a working VPN: such a config is not added to the pool and goes to the blacklist for 7 days.
+• The blacklist is now split per network, like the pool: Wi-Fi and mobile separately; the old shared list is migrated to mobile, the clear button wipes both.
+• Main screen: the bottom rail is now 56 dp square buttons with a single-line caption — labels no longer wrap or get clipped.
+• Below the buttons: target region selector — Europe, Asia, America. One ping target and one download URL per region (Europe/America: GitHub, Asia: regional Lenovo site).
+• Settings: new "Experimental" tab — Tor bridge as VPN (documented bridges + pluggable transports) plus an explicit split between "DPI for YouTube/Discord" and "DPI for the VLESS VPN".

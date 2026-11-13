@@ -67,6 +67,9 @@ public class SettingsActivity extends Activity {
             editGateTimeout, editStrategyWifi, editStrategyLte, editVpnDns, editMonitor,
             editSwitchTimeout, editTorBridges, editTorExtra, editTorBridgeWait, editPingTargets,
             editHealthUrls, editLanes, editDpiSources, editDpiOnlyStrategy, editDpiOnlyUrls;
+    /** Строка с тремя регионами на странице «Списки». */
+    private LinearLayout regionRow;
+    private TextView regionNow, regionNote;
     /** Панель рабочих конфигов на первой вкладке (та же, что на отдельном экране). */
     private PoolPanel poolPanel;
     private Switch swDesync, swIpv6, swAutoSwitch, swBoot, swEmbedded, swDpiAutotune,
@@ -142,7 +145,10 @@ public class SettingsActivity extends Activity {
         note("Режим для случаев, когда нужен не VPN, а именно обход DPI: YouTube, Discord, "
                 + "Instagram. Локальный ciadpi фрагментирует TLS прямо на телефоне — трафик "
                 + "идёт напрямую, без чужого сервера, и не тратит подписку на VPN. "
-                + "DNS при этом поднимается только на время работы режима.");
+                + "DNS при этом поднимается только на время работы режима.\n\n"
+                + "Это ДРУГОЙ DPI, чем «DPI для VPN (VLESS)» на вкладке «Обход»: там обход "
+                + "линии до VPN-сервера, здесь — обход до самих сервисов без всякого VPN. "
+                + "Стратегия и список адресов у них свои.");
         editDpiOnlyStrategy = singleField(Prefs.dpiOnlyStrategy(this));
         label("Стратегия для режима «только DPI» (аргументы ciadpi)", Help.DPI_STRATEGY);
         add(editDpiOnlyStrategy);
@@ -184,6 +190,33 @@ public class SettingsActivity extends Activity {
         addAction(dpiOnlyStop, "Остановить", Help.DPI_ONLY_STOP);
 
         newPage("Списки");
+
+        // --- целевой регион ---
+        section("Целевой регион");
+        note("Регион задаёт ДВА адреса: цель TCP-пинга («интернет вообще есть») и ссылку, "
+                + "по которой меряется скорость. На регион ровно одна цель и одна ссылка. "
+                + "Раньше был набор из пяти адресов — и он маскировал проблему: «работает» "
+                + "могло означать «сработал один из пяти», а скорость мерилась по другому "
+                + "хосту, чем пинг. Европа и Америка проверяются по GitHub (у Fastly есть "
+                + "европейские и американские узлы), Азия — по региональному сайту Lenovo: "
+                + "GitHub там медленнее и хуже достижим. Сайты можно переписать руками ниже — "
+                + "кнопка региона просто подставляет свои значения.");
+        regionNow = Ui.caption(this, "");
+        regionNow.setTextColor(TEXT);
+        add(regionNow);
+        regionRow = new LinearLayout(this);
+        regionRow.setOrientation(LinearLayout.HORIZONTAL);
+        add(regionRow);
+        regionNote = Ui.caption(this, "");
+        add(regionNote);
+        Button regionApply = smallButton("Подставить сайты региона заново");
+        regionApply.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                applyRegion(Prefs.region(SettingsActivity.this));
+                toast("Сайты региона подставлены в поля ниже — не забудьте «Сохранить»");
+            }
+        });
+        addAction(regionApply, "Сайты региона", Help.PING_TARGETS);
 
         // --- скорость ---
         section("Скорость");
@@ -228,12 +261,12 @@ public class SettingsActivity extends Activity {
         label("Таймаут пинга, мс (2000 по умолчанию)", Help.PING_TIMEOUT_MS);
         add(editTimeout);
 
-        editPingTargets = multiField(Prefs.join(Prefs.pingTargets(this)), 5);
-        label("5 целей TCP-пинга «есть ли интернет» (host:port, по одной на строку)", Help.PING_TARGETS);
+        editPingTargets = multiField(Prefs.join(Prefs.pingTargets(this)), 3);
+        label("Цель TCP-пинга «есть ли интернет» (host:port; одна строка — норма)", Help.PING_TARGETS);
         add(editPingTargets);
 
-        editHealthUrls = multiField(Prefs.join(Prefs.healthUrls(this)), 5);
-        label("5 мест проверки канала через туннель (URL, по одному на строку)", Help.HEALTH_URLS);
+        editHealthUrls = multiField(Prefs.join(Prefs.healthUrls(this)), 3);
+        label("Проверка канала через туннель (URL; одна строка — норма)", Help.HEALTH_URLS);
         add(editHealthUrls);
 
         note("1000 мс — это фильтр «более-менее работающих»: то, что пингуется дольше, "
@@ -260,7 +293,12 @@ public class SettingsActivity extends Activity {
         newPage("Обход");
 
         // --- DPI на линии ---
-        section("DPI-обход");
+        section("DPI для VPN (VLESS)");
+        note("Это DPI на линии ОТ ТЕЛЕФОНА ДО VPN-СЕРВЕРА: ciadpi поднимается между ядром "
+                + "Xray и сервером и фрагментирует TLS-handshake, чтобы провайдер не порезал "
+                + "его по SNI. К YouTube и Discord это отношения не имеет — для них есть "
+                + "отдельный режим на вкладке «Только DPI» со своей стратегией и своими "
+                + "адресами. Общий у них только движок; настройки разные.");
         swDesync = switchRow("DPI-обход линии до VPN-сервера (ciadpi) — по умолчанию включён",
                 Prefs.desyncLine(this), Help.DESYNC_LINE);
         note("Стратегии у Wi-Fi и мобильного разные: дома обход обычно не нужен, а в "
@@ -430,32 +468,10 @@ public class SettingsActivity extends Activity {
         swTorFallback = switchRow("Если VPN не отвечает — пускать трафик через Tor-мосты",
                 Prefs.torFallback(this), Help.TOR_FALLBACK);
 
-        // --- Tor как самостоятельный VPN: отдельный способ включения, не резерв
-        Button torAsVpn = smallButton("Включить Tor-мост как VPN");
-        torAsVpn.setTextColor(0xFFB388FF);
-        torAsVpn.setTextSize(15);
-        torAsVpn.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                savePrefs();
-                VpnStart.connectTor(SettingsActivity.this);
-                toast("Поднимаю Tor-мосты как VPN — это может занять до минуты");
-            }
-        });
-        addAction(torAsVpn, "Tor как VPN", Help.TOR_AS_VPN);
-
-        Button torStop = smallButton("Остановить");
-        torStop.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                VpnStart.stop(SettingsActivity.this);
-                toast("Останавливаю");
-            }
-        });
-        addAction(torStop, "Остановить Tor", Help.TOR_AS_VPN);
-        note("Режим не зависит от переключателя выше: тот — автоматический резерв, а эта "
-                + "кнопка поднимает мосты сразу. Используются мосты из списка ниже (пусто — "
-                + "встроенные Vanilla), перед созданием туннеля скорость через Tor "
-                + "проверяется по тому же порогу. «Переключить» в уведомлении вернёт на "
-                + "обычный конфиг из пула, если он там есть.");
+        note("Кнопки «Включить Tor-мост как VPN» и «Остановить» переехали во вкладку "
+                + "«Экспериментальное»: там же объяснено, почему этот способ работает там, "
+                + "где VPN-сервер не отвечает, и чем он платит за это. Здесь остались мосты "
+                + "и лимит ожидания — они нужны обоим режимам: и резерву, и Tor как VPN.");
         editTorBridges = multiField(Prefs.torBridges(this), 4);
         label("Мосты (пусто — встроенные Vanilla)", Help.TOR_BRIDGES);
         add(editTorBridges);
@@ -532,6 +548,90 @@ public class SettingsActivity extends Activity {
         addAction(browser, "Встроенный браузер", Help.BROWSER);
         note("Браузер — отдельный экран: одна вкладка, поиск через GET-формы, и ходит он "
                 + "только через Tor с мостами. Если мостов нет или VPN включён, он скажет об этом.");
+
+        // --- экспериментальный режим ---
+        newPage("Экспериментальное");
+
+        section("Экспериментальное");
+        note("Здесь собрано то, что ведёт себя иначе, чем обычный VPN-конфиг: Tor-мост "
+                + "вместо сервера и разделение DPI по назначению. Оба способа рабочие и "
+                + "документированы, но у них другие ограничения — поэтому они отдельно, а "
+                + "не в общем списке настроек.");
+
+        section("Tor-мост → подключение вместо VPN");
+        note("Способ: приложение поднимает tun, внутри — Tor на Vanilla-мостах (obfs4/meek "
+                + "и подобные), наружу отдаёт SOCKS5 на 127.0.0.1, DNS уходит в Tor. "
+                + "VPN-сервер из пула не используется вообще.\n\n"
+                + "Зачем: мост выглядит для провайдера как обычный HTTPS к постороннему "
+                + "сайту, поэтому он поднимается там, где VPN-серверы недоступны напрямую и "
+                + "даже через DPI. Это документированный способ Tor (bridges + pluggable "
+                + "transports), а не самодельный трюк, — поэтому мосты работают, когда "
+                + "«рабочие» конфиги молчат.\n\n"
+                + "Чем платите: через Tor нет UDP — QUIC и голосовые звонки в играх не "
+                + "пойдут; скорость обычно 0.5–5 Мбит/с, задержка выше; часть сайтов "
+                + "встречает капчу. Перед подключением скорость проверяется по тому же "
+                + "порогу, что у конфигов, а мосты перебираются по лимиту ожидания из "
+                + "вкладки «Tor».\n\n"
+                + "Если не поднялось: проверьте список мостов и лимит ожидания на вкладке "
+                + "«Tor», затем лог. «Переключить» в уведомлении вернёт на обычный конфиг из "
+                + "пула, если он там есть.");
+        Button torAsVpn = smallButton("Включить Tor-мост как VPN");
+        torAsVpn.setTextColor(Ui.TOR);
+        torAsVpn.setTextSize(15);
+        torAsVpn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                savePrefs();
+                VpnStart.connectTor(SettingsActivity.this);
+                toast("Поднимаю Tor-мосты как VPN — это может занять до минуты");
+            }
+        });
+        addAction(torAsVpn, "Tor как VPN", Help.TOR_AS_VPN);
+
+        Button torStop = smallButton("Остановить");
+        torStop.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                VpnStart.stop(SettingsActivity.this);
+                toast("Останавливаю");
+            }
+        });
+        addAction(torStop, "Остановить Tor", Help.TOR_AS_VPN);
+        Button editBridges = smallButton("Мосты и лимит ожидания (вкладка «Tor»)");
+        editBridges.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { selectPageByTitle("Tor"); }
+        });
+        add(editBridges);
+
+        section("Два разных DPI: для YouTube/Discord и для VPN (VLESS)");
+        note("Это не одно и то же, и путать их нельзя.\n\n"
+                + "1) DPI для VPN (VLESS) — линия ОТ ТЕЛЕФОНА ДО VPN-СЕРВЕРА. Провайдер "
+                + "видит TLS-handshake к серверу и может резать его по SNI. Здесь работает "
+                + "ciadpi, поднятый МЕЖДУ ядром Xray и сервером: он фрагментирует ClientHello, "
+                + "и конфиг поднимается там, где напрямую не отвечает. Настраивается на "
+                + "вкладке «Обход» — стратегия (общая и отдельная для Wi-Fi), автоподбор, "
+                + "стратегии, найденные при сборе пула. К YouTube и Discord это отношения не "
+                + "имеет: весь остальной трафик идёт через VPN как обычно.\n\n"
+                + "2) DPI для YouTube/Discord — обход БЕЗ VPN-сервера (режим «только DPI»). "
+                + "Локальный ciadpi фрагментирует TLS к самим сервисам, трафик идёт с "
+                + "телефона напрямую. У него своя стратегия и свой список адресов для "
+                + "проверки — вкладка «Только DPI».\n\n"
+                + "Общее у них только одно: один и тот же движок ciadpi. Стратегии, пороги и "
+                + "списки адресов — разные, и менять их надо по отдельности.");
+        Button openVpnDpi = smallButton("DPI для VPN (VLESS) — вкладка «Обход»");
+        openVpnDpi.setTextColor(Ui.INFO);
+        openVpnDpi.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { selectPageByTitle("Обход"); }
+        });
+        add(openVpnDpi);
+        Button openOnlyDpi = smallButton("DPI для YouTube/Discord — вкладка «Только DPI»");
+        openOnlyDpi.setTextColor(Ui.INFO);
+        openOnlyDpi.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { selectPageByTitle("Только DPI"); }
+        });
+        add(openOnlyDpi);
+
+        note("Экспериментальное — значит, что поведение может меняться между версиями. "
+                + "Оба способа не заменяют пул и не включаются сами: их запускают кнопкой, "
+                + "а «Остановить» возвращает обычный режим.");
 
         newPage("Данные");
 
@@ -643,7 +743,10 @@ public class SettingsActivity extends Activity {
         note("Готовые наборы: «Стандарт» (с DPI-обходом — он же по умолчанию), «Wi-Fi» "
                 + "(без DPI, самый быстрый замер) и «Белые списки» (низкий порог, только "
                 + "white-источники). Всё, что вы импортируете из .json, остаётся в этом же "
-                + "списке отдельным набором — можно вернуться одной кнопкой.");
+                + "списке отдельным набором — можно вернуться одной кнопкой. Набор задаёт и "
+                + "адреса проверок (в них по несколько ссылок) — после применения набора "
+                + "кнопка «Подставить сайты региона заново» на вкладке «Списки» вернёт одну "
+                + "цель пинга и одну ссылку замера выбранного региона.");
 
         presets = Presets.all(this);
         ArrayAdapter<String> presetAdapter =
@@ -733,24 +836,27 @@ public class SettingsActivity extends Activity {
         swEmbedded = switchRow("Встроенный резерв конфигов", Prefs.embeddedEnabled(this), Help.EMBEDDED);
         // Чёрный список: конфиги, которые уже проверяли и они не работали. Их не пингуем
         // неделю — иначе каждый сбор пула заново тратит время на одно и то же.
-        final int blacklisted = Blacklist.size(this);
+        final int blacklisted = Blacklist.sizeAll(this);
+        final String blackSummary = Blacklist.summary(this);
         final TextView blackOut = new TextView(this);
         blackOut.setTextColor(TEXT_DIM);
         blackOut.setTextSize(12);
         blackOut.setText(blacklisted == 0
-                ? "Нерабочих конфигов в списке нет."
-                : "Нерабочих конфигов в списке: " + blacklisted
-                        + ". Они не пингуются и не меряются; запись живёт "
+                ? "Нерабочих конфигов в списках нет."
+                : "Нерабочих конфигов всего: " + blacklisted + " (" + blackSummary + "). "
+                        + "Списки раздельные: конфиг, не поднявшийся у оператора, дома "
+                        + "проверяется снова — блокировки у сетей разные. Запись живёт "
                         + (Blacklist.TTL_MS / (24 * 3600 * 1000)) + " дней.");
         add(blackOut);
 
         Button clearBlacklist = smallButton("Очистить список нерабочих конфигураций");
         clearBlacklist.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                int n = Blacklist.size(SettingsActivity.this);
-                Blacklist.clear(SettingsActivity.this);
-                blackOut.setText("Список очищен (было " + n + "). Следующий сбор пула "
-                        + "перепроверит всё заново.");
+                int n = Blacklist.sizeAll(SettingsActivity.this);
+                String was = Blacklist.summary(SettingsActivity.this);
+                Blacklist.clearAll(SettingsActivity.this);
+                blackOut.setText("Оба списка очищены (было " + n + ": " + was + "). Следующий "
+                        + "сбор пула перепроверит всё заново.");
                 toast("Список нерабочих конфигураций очищен");
             }
         });
@@ -901,6 +1007,9 @@ public class SettingsActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (poolPanel != null) poolPanel.refresh();
+        // Регион могли сменить на главном экране, а список нерабочих — очистить в другой
+        // вкладке: подписи должны показывать то, что действительно лежит в настройках.
+        fillRegionRow();
     }
 
     @Override
@@ -1112,6 +1221,52 @@ public class SettingsActivity extends Activity {
         });
         tabBar.addView(tab);
         pageTabs.add(tab);
+    }
+
+    /** Переключиться на вкладку по её названию (кнопки «открыть раздел»). */
+    private void selectPageByTitle(String title) {
+        for (int i = 0; i < pageTabs.size(); i++) {
+            TextView tab = pageTabs.get(i);
+            if (tab != null && title.contentEquals(tab.getText())) {
+                selectPage(i);
+                return;
+            }
+        }
+    }
+
+    /** Перерисовать строку регионов и подписи к ней. */
+    private void fillRegionRow() {
+        if (regionRow == null) return;
+        regionRow.removeAllViews();
+        final String current = Prefs.region(this);
+        for (final String id : Regions.ids()) {
+            final TextView chip = Ui.tab(this, Regions.label(id));
+            boolean on = id.equals(current);
+            Ui.paintChip(chip, on ? Ui.ACCENT : Ui.TEXT_DIM, on, this);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMargins(0, 0, dp(8), 0);
+            chip.setLayoutParams(lp);
+            chip.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { applyRegion(id); }
+            });
+            regionRow.addView(chip);
+        }
+        if (regionNow != null) {
+            regionNow.setText("Сейчас: " + Regions.label(current)
+                    + " · пинг " + Regions.pingTarget(current));
+        }
+        if (regionNote != null) regionNote.setText(Regions.note(current));
+    }
+
+    /** Сменить регион и подставить его адреса в поля (пока без сохранения). */
+    private void applyRegion(String id) {
+        Prefs.setRegion(this, id);
+        if (editPingTargets != null) editPingTargets.setText(Regions.pingTarget(id));
+        if (editSpeedUrls != null) editSpeedUrls.setText(Regions.speedUrl(id));
+        if (editHealthUrls != null) editHealthUrls.setText(Regions.healthUrl(id));
+        fillRegionRow();
+        toast("Регион: " + Regions.label(id) + " — пинг и скорость меряются по его сайтам");
     }
 
     /** Показать страницу по номеру (остальные прячем). */

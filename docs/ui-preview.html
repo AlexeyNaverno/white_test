@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<title>Обход Белых Списков — макет интерфейса 0.1.14</title>
+<title>Обход Белых Списков — макет интерфейса 0.1.15</title>
 <style>
   :root{
     --bg:#0B0F14; --surface:#131A24; --surface2:#1B2532; --stroke:#243040;
@@ -75,10 +75,10 @@
 </style>
 </head>
 <body>
-<h1 class="page">Макет интерфейса 0.1.14</h1>
+<h1 class="page">Макет интерфейса 0.1.15</h1>
 <p class="lead">Это <b>макет, а не скриншот</b>: он собран из тех же токенов, что теперь использует
 приложение (цвета, отступы 4/8/12/16/24, радиусы 10/16/20, шрифты 11/12/14/16/24). Тексты и
-элементы — настоящие, из кода 0.1.14. Точные размеры на телефоне зависят от плотности экрана.</p>
+элементы — настоящие, из кода 0.1.15. Точные размеры на телефоне зависят от плотности экрана.</p>
 
 <div class="row">
 
@@ -106,13 +106,22 @@
         <span style="color:var(--dim);font-size:12px">Нажмите, чтобы выбрать конфиг вручную</span>
       </div>
 
-      <div style="display:flex;gap:5px;margin-top:20px">
-        <div class="btn" style="flex:1;height:44px;font-size:12px;margin-top:0">Поиск</div>
-        <div class="btn" style="flex:1;height:44px;font-size:12px;margin-top:0">Пул</div>
-        <div class="btn" style="flex:1;height:44px;font-size:12px;margin-top:0">Рабочие</div>
-        <div class="btn" style="flex:1;height:44px;font-size:12px;margin-top:0">DPI</div>
-        <div class="btn" style="flex:1;height:44px;font-size:12px;margin-top:0">Журнал</div>
+      <div style="display:flex;gap:6px;margin-top:20px">
+        <div class="btn" style="flex:1;height:56px;margin-top:0;padding:0;font-size:11px;border-radius:16px;display:flex;align-items:center;justify-content:center;text-align:center">Поиск</div>
+        <div class="btn" style="flex:1;height:56px;margin-top:0;padding:0;font-size:11px;border-radius:16px;display:flex;align-items:center;justify-content:center;text-align:center">Пул</div>
+        <div class="btn" style="flex:1;height:56px;margin-top:0;padding:0;font-size:11px;border-radius:16px;display:flex;align-items:center;justify-content:center;text-align:center">Рабочие</div>
+        <div class="btn" style="flex:1;height:56px;margin-top:0;padding:0;font-size:11px;border-radius:16px;display:flex;align-items:center;justify-content:center;text-align:center">DPI</div>
+        <div class="btn" style="flex:1;height:56px;margin-top:0;padding:0;font-size:11px;border-radius:16px;display:flex;align-items:center;justify-content:center;text-align:center">Журнал</div>
       </div>
+
+      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:10px;font-size:12px;color:var(--dim)">
+        Регион:
+        <span class="chip solid on">Европа</span>
+        <span class="chip off">Азия</span>
+        <span class="chip off">Америка</span>
+      </div>
+      <div class="note" style="margin-top:2px">Регион задаёт одну цель пинга и одну ссылку замера:
+        Европа и Америка — GitHub, Азия — сайт Lenovo своего региона.</div>
 
       <div class="card">
         <div class="row-between">
@@ -126,7 +135,7 @@
           раскрывается сама.</div>
       </div>
 
-      <div class="footer">Обход Белых Списков 0.1.14 (24)<br>
+      <div class="footer">Обход Белых Списков 0.1.15 (25)<br>
         В уведомлении — «Пауза», «Переключить» и «Остановить».</div>
     </div>
     <div class="caption-phone">Главный экран</div>
@@ -149,8 +158,22 @@
         <div class="tab">Списки</div>
         <div class="tab">Обход</div>
         <div class="tab">Tor</div>
+        <div class="tab">Экспериментальное</div>
         <div class="tab">Данные</div>
         <div class="tab">Инфо</div>
+      </div>
+
+      <div class="card">
+        <div class="overline">Целевой регион</div>
+        <div class="label">Сейчас: Европа · пинг raw.githubusercontent.com:443</div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <span class="chip solid on">Европа</span>
+          <span class="chip off">Азия</span>
+          <span class="chip off">Америка</span>
+        </div>
+        <div class="note">Европа и Америка проверяются по GitHub (разные файлы), Азия — по
+          региональному сайту Lenovo: GitHub там медленнее и хуже достижим. На регион одна
+          цель пинга и одна ссылка замера.</div>
       </div>
 
       <div class="card">
@@ -168,15 +191,14 @@
 
       <div class="card">
         <div class="overline">Файлы для замера</div>
-        <div class="field">https://raw.githubusercontent.com/luxxuria/harvester/main/ping_tested.txt
-https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni-local/vless.txt
-http://cp.cloudflare.com/generate_204</div>
-        <div class="note">Первыми идут адреса, которые нельзя «разрешить точечно»: по ним видно,
-          что канал годится не только для двух популярных сервисов.</div>
+        <div class="field">https://raw.githubusercontent.com/luxxuria/harvester/main/ping_tested.txt</div>
+        <div class="note">С 0.1.15 по умолчанию одна ссылка — из целевого региона. Набор из
+          четырёх адресов маскировал проблему: «работает» могло означать «сработал один из
+          четырёх». Дополнительные строки можно вписать руками.</div>
       </div>
 
       <div class="btn primary" style="margin-top:24px">Сохранить настройки</div>
-      <div class="footer">Обход Белых Списков 0.1.14 · Xray-core: 26.10.31</div>
+      <div class="footer">Обход Белых Списков 0.1.15 · Xray-core: 26.10.31</div>
     </div>
     <div class="caption-phone">Настройки</div>
   </div>
@@ -261,6 +283,7 @@ http://cp.cloudflare.com/generate_204</div>
         <div class="tab">Списки</div>
         <div class="tab">Обход</div>
         <div class="tab">Tor</div>
+        <div class="tab">Экспериментальное</div>
         <div class="tab">Данные</div>
         <div class="tab active">Инфо</div>
       </div>
