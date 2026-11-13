@@ -52,10 +52,12 @@ public class MainActivity extends Activity {
     private static final int PURPLE = 0xFF9C27B0;
     private static final int PURPLE_DARK = 0xFF6A1B9A;
 
-    /** Сколько живых конфигов «вживую» проверяем при сборе пула (дольше — не быстрее). */
-    private static final int MAX_SPEED_TESTS = 150;
-    /** Как только в пуле набралось столько рабочих — дальше не меряем: пул уже есть. */
-    private static final int POOL_ENOUGH = 25;
+    /**
+     * Сколько конфигов проверяем за один заход. Пакет набирается случайно из ВСЕХ
+     * скачанных списков, а не «первые строки первого источника»: только так дорожки
+     * замера не занимает один список, пока до остальных не дошла очередь.
+     */
+    private static final int POOL_BATCH = 200;
     /** Замер из пула моложе этого возраста переиспользуем, не гоняя конфиг заново. */
     private static final long POOL_REUSE_MS = 12 * 60 * 60 * 1000L;
     /**
@@ -114,16 +116,16 @@ public class MainActivity extends Activity {
         String previousCrash = CrashReporter.consumeIfPresent(this);
         super.onCreate(savedInstanceState);
 
-        ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(Ui.BG_OLED);      // OLED: чёрный фон только здесь
+        // Прокрутки на главном нет: экран должен целиком влезать в один экран телефона.
+        // Всё лишнее ужато — мелкая линейка действий, короткий журнал, который к тому же
+        // скрыт по умолчанию и при открытии забирает ровно оставшееся место.
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(Ui.BG_OLED);        // OLED: чёрный фон только здесь
         int p = dp(16);
-        root.setPadding(p, p, p, dp(24));
-        scroll.addView(root, new ScrollView.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        setContentView(scroll);
-        Ui.applyInsets(scroll);
+        root.setPadding(p, dp(12), p, dp(12));
+        setContentView(root);
+        Ui.applyInsets(root);
         if (previousCrash != null) showCrashDialog(previousCrash);
 
         // ---- шапка: название, подпись и вход в настройки
@@ -151,7 +153,7 @@ public class MainActivity extends Activity {
         statusRow.addView(statusDetail, detailLp);
         LinearLayout.LayoutParams statusLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        statusLp.topMargin = dp(20);
+        statusLp.topMargin = dp(14);
         root.addView(statusRow, statusLp);
 
         // ---- главная кнопка: единственный крупный элемент экрана
@@ -159,7 +161,7 @@ public class MainActivity extends Activity {
         powerWrap.setGravity(Gravity.CENTER_HORIZONTAL);
         LinearLayout.LayoutParams wrapLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        wrapLp.topMargin = dp(24);
+        wrapLp.topMargin = dp(16);
         powerWrap.setLayoutParams(wrapLp);
 
         powerButton = new Button(this);
@@ -175,7 +177,7 @@ public class MainActivity extends Activity {
         powerButton.setMinimumHeight(0);
         powerButton.setStateListAnimator(null);
         powerButton.setBackgroundTintList(null);
-        int powerSize = dp(176);
+        int powerSize = dp(160);
         powerButton.setLayoutParams(new LinearLayout.LayoutParams(powerSize, powerSize));
         powerButton.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { toggleConnection(); }
@@ -187,7 +189,7 @@ public class MainActivity extends Activity {
         powerHint.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams hintLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        hintLp.topMargin = dp(16);
+        hintLp.topMargin = dp(10);
         powerHint.setLayoutParams(hintLp);
         root.addView(powerHint);
 
@@ -204,7 +206,7 @@ public class MainActivity extends Activity {
         });
         LinearLayout.LayoutParams poolTextLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        poolTextLp.topMargin = dp(18);
+        poolTextLp.topMargin = dp(12);
         poolText.setLayoutParams(poolTextLp);
         root.addView(poolText);
 
@@ -215,7 +217,7 @@ public class MainActivity extends Activity {
         quickRow.setOrientation(LinearLayout.HORIZONTAL);
         LinearLayout.LayoutParams quickRowLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        quickRowLp.topMargin = dp(20);
+        quickRowLp.topMargin = dp(14);
         quickRow.setLayoutParams(quickRowLp);
 
         btnQuick = railButton("Поиск");
@@ -266,8 +268,8 @@ public class MainActivity extends Activity {
         // ---- консоль: скрыта, пока её не открыли кнопкой
         consoleCard = Ui.card(this);
         LinearLayout.LayoutParams consoleLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        consoleLp.topMargin = dp(16);
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+        consoleLp.topMargin = dp(12);
         consoleCard.setLayoutParams(consoleLp);
         consoleCard.setVisibility(View.GONE);
 
@@ -292,8 +294,9 @@ public class MainActivity extends Activity {
         logScroll.setFillViewport(true);
         logScroll.setBackground(Ui.shape(Ui.BG, Ui.STROKE, 1, Ui.R_MD, this));
         logScroll.setPadding(dp(10), dp(10), dp(10), dp(10));
+        // Журнал больше не 200 dp: он занимает остаток экрана, а не выталкивает кнопки.
         LinearLayout.LayoutParams logLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(200));
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
         logLp.topMargin = dp(8);
         logScroll.setLayoutParams(logLp);
         consoleCard.addView(logScroll);
@@ -301,8 +304,8 @@ public class MainActivity extends Activity {
 
         // ---- подвал: версия и напоминание про уведомление
         TextView footer = Ui.caption(this, versionLine()
-                + "\nВ уведомлении — «Пауза», «Переключить» и «Остановить».");
-        footer.setPadding(dp(4), dp(24), dp(4), 0);
+                + " · в уведомлении «Пауза» и «Остановить»");
+        footer.setPadding(dp(4), dp(12), dp(4), 0);
         root.addView(footer);
 
         registerStatusReceiver();
@@ -448,8 +451,8 @@ public class MainActivity extends Activity {
 
     /** Строка версии для подвала: «Обход Белых Списков 0.1.11 (21)». */
     private String versionLine() {
-        String name = "0.1.13";
-        long code = 23;
+        String name = "0.1.14";
+        long code = 24;
         try {
             android.content.pm.PackageInfo info = getPackageManager()
                     .getPackageInfo(getPackageName(), 0);
@@ -693,16 +696,16 @@ public class MainActivity extends Activity {
         searching = true;
         ConfigRepository.clearCancel();
         setBusy(true, "Сбор пула…");
-        uiLog("Сбор пула: 1) источники (лимит по времени) → 2) пинг → 3) скорость");
+        uiLog("Сбор пула: обновляю списки, затем пакетами по " + POOL_BATCH
+                + " случайных конфигов — пинг, замер, и так до конца всех списков");
 
         new Thread(new Runnable() {
             @Override public void run() {
                 try {
                     // 1) обновить ВСЕ списки. Любая ошибка на этом шаге не должна валить
                     // весь сбор пула: работаем с тем, что уже лежит в хранилище.
-                    ConfigRepository.UpdateResult res = null;
                     try {
-                        res = ConfigRepository.updateAll(
+                        ConfigRepository.UpdateResult res = ConfigRepository.updateAll(
                                 MainActivity.this, new ConfigRepository.Progress() {
                                     @Override public void onMessage(String message) { uiLog(message); }
                                 });
@@ -718,16 +721,22 @@ public class MainActivity extends Activity {
                                 + ") — продолжаю с локальным списком");
                     }
 
+                    // 1.0) вычеркнуть из скачанных списков всё, что уже в чёрном списке:
+                    // иначе мёртвые конфиги возвращаются с каждым обновлением и снова
+                    // занимают пинг и дорожки замера.
+                    int purged = ConfigRepository.dropBlacklisted(MainActivity.this);
+                    if (purged > 0) {
+                        uiLog("Чёрный список: из скачанных списков вычеркнуто " + purged);
+                    }
+
                     List<ProxyConfig> all = ConfigRepository.all(MainActivity.this);
                     if (all.isEmpty()) {
                         uiLog("Конфигов нет — проверьте источники в настройках");
                         return;
                     }
 
-                    // 1.1) Отсекаем то, что ядро не поднимет НИКОГДА. У таких конфигов
-                    // TCP-пинг проходит, они попадают в «живые» и занимают дорожку замера,
-                    // а потом падают одной и той же ошибкой ядра: в отчёте из 90 замеров
-                    // так уходило 61, и пул собирал 3 рабочих из 1656 «живых».
+                    // 1.1) Отсекаем то, что ядро не поднимет НИКОГДА: такие конфиги
+                    // проходят пинг, занимают дорожку и падают одной и той же ошибкой.
                     final Map<String, Integer> rejects = new LinkedHashMap<>();
                     final boolean relay = Prefs.allowNoTls(MainActivity.this);
                     all = Probe.usable(all, rejects, relay);
@@ -747,16 +756,16 @@ public class MainActivity extends Activity {
                         return;
                     }
 
-                    // 1.1b) Чёрный список: то, что уже проверяли и оно не работало, не
-                    // пингуем вовсе. Запись живёт неделю — потом конфиг перепроверяется.
+                    // 1.1b) Страховка: в хранилище могли остаться записи из чёрного списка
+                    // (например, добавленные только что, уже после чистки).
                     int inBlacklist = Blacklist.size(MainActivity.this);
                     if (inBlacklist > 0) {
                         int before = all.size();
                         all = Blacklist.filter(MainActivity.this, all);
                         int skipped = before - all.size();
                         uiLog("Чёрный список: " + inBlacklist + " нерабочих"
-                                + (skipped > 0 ? ", из них " + skipped + " есть в текущих списках — пропускаю"
-                                                : " (в текущих списках их нет)"));
+                                + (skipped > 0 ? ", из них " + skipped
+                                        + " есть в текущих списках — пропускаю" : ""));
                         if (all.isEmpty()) {
                             uiLog("Все конфиги в чёрном списке — очистите его в настройках"
                                     + " (Данные → «Очистить список нерабочих конфигураций»)");
@@ -765,7 +774,6 @@ public class MainActivity extends Activity {
                     }
 
                     // 1.2) стратегии DPI: тот же сбор пула — удобный момент их обновить.
-                    // Ошибка здесь тоже не повод бросать замер скорости.
                     if (!ConfigRepository.isCancelled()) {
                         try {
                             uiLog("Обновляю стратегии DPI-обхода с GitHub…");
@@ -787,206 +795,125 @@ public class MainActivity extends Activity {
                             Prefs.pingTimeoutMs(MainActivity.this));
                     uiLog("Сеть: " + net.text());
 
-                    // 2) пинг: партиями, с накопленной статистикой
-                    uiLog("Пингую " + all.size() + " конфигов (потоков "
-                            + Prefs.pingThreads(MainActivity.this) + ", таймаут "
-                            + Prefs.pingTimeoutMs(MainActivity.this) + " мс)…");
-                    final int pingStep = 50;
-                    ConfigTester.Outcome ping = ConfigTester.test(all,
-                            Prefs.pingThreads(MainActivity.this),
-                            Prefs.pingTimeoutMs(MainActivity.this),
-                            new ConfigTester.Listener() {
-                                @Override public void onProgress(int done, int total, int ok, int failed) {
-                                    if (done % pingStep == 0 || done == total) {
-                                        uiLog("  пинг " + done + "/" + total
-                                                + " → живых " + ok + ", мёртвых " + failed);
-                                    }
-                                }
-                            });
-                    if (ping.cancelled) { uiLog("Сбор остановлен"); return; }
-                    uiLog("Пинг: " + ping.summary());
-                    if (ping.alive.isEmpty()) {
-                        uiLog("Ни один конфиг не пингуется — сеть недоступна или источники пустые");
-                        return;
-                    }
-                    StringBuilder aliveLine = new StringBuilder("Пингуются: ");
-                    for (int i = 0; i < Math.min(10, ping.alive.size()); i++) {
-                        ProxyConfig a = ping.alive.get(i);
-                        if (i > 0) aliveLine.append(" · ");
-                        aliveLine.append(truncate(a.name, 20)).append(' ').append(a.latency).append(" мс");
-                    }
-                    if (ping.alive.size() > 10) aliveLine.append(" · ещё ").append(ping.alive.size() - 10);
-                    uiLog(aliveLine.toString());
+                    // 2) Порядок обхода списков случайный, а не «первые две тысячи строк»:
+                    // источники отдают файлы подряд, и при последовательном обходе все
+                    // дорожки занимал один список, пока до остальных не доходило дело.
+                    java.util.Collections.shuffle(all, new java.util.Random());
 
-                    // 3) скорость: сначала НОВЫЕ конфиги, затем уже лежащие в пуле.
-                    // Старые замеры моложе POOL_REUSE_MS переиспользуем, а не гоняем заново:
-                    // иначе каждый сбор пула заново меряет те же 200 конфигов (это и было
-                    // «результат сильно не сразу»).
-                    final Map<String, Pool.Entry> oldPool = new LinkedHashMap<>();
+                    final Map<String, Pool.Entry> pool = new LinkedHashMap<>();
                     for (Pool.Entry e : Pool.load(MainActivity.this)) {
                         String key = ConfigRepository.canonicalKey(e.raw);
-                        if (key != null) oldPool.put(key, e);
+                        if (key != null) pool.put(key, e);
                     }
-                    List<ProxyConfig> fresh = new ArrayList<>();
-                    List<ProxyConfig> known = new ArrayList<>();
-                    final List<Pool.Entry> found =
-                            java.util.Collections.synchronizedList(new ArrayList<Pool.Entry>());
-                    // Счётчик причин отказа: в конце видно, ЧТО именно мешает —
-                    // «нет данных», «ядро не запустилось», «несовместим» и т.п.
+                    final int poolAtStart = pool.size();
                     final Map<String, Integer> why = java.util.Collections.synchronizedMap(
                             new LinkedHashMap<String, Integer>());
-                    long now = System.currentTimeMillis();
-                    int reused = 0;
-                    for (ProxyConfig cfg : ping.alive) {
-                        String key = ConfigRepository.canonicalKey(cfg.raw);
-                        Pool.Entry old = key == null ? null : oldPool.get(key);
-                        if (old == null) {
-                            fresh.add(cfg);
+
+                    int batches = (all.size() + POOL_BATCH - 1) / POOL_BATCH;
+                    int pinged = 0, alive = 0, reused = 0, measuredOk = 0, dpiBudget = DPI_RETRIES;
+                    uiLog("К перебору " + all.size() + " конфигов пакетами по " + POOL_BATCH
+                            + ": " + batches + " заходов. Потоков пинга "
+                            + Prefs.pingThreads(MainActivity.this) + ", дорожек замера "
+                            + Prefs.speedLanes(MainActivity.this));
+
+                    for (int from = 0; from < all.size(); from += POOL_BATCH) {
+                        if (ConfigRepository.isCancelled()) break;
+                        int batchNo = from / POOL_BATCH + 1;
+                        List<ProxyConfig> batch = new ArrayList<>(
+                                all.subList(from, Math.min(all.size(), from + POOL_BATCH)));
+                        uiLog("Пакет " + batchNo + "/" + batches + ": " + batch.size()
+                                + " конфигов (проверено " + pinged + " из " + all.size() + ")");
+
+                        // 2.1) пинг только этого пакета
+                        ConfigTester.Outcome ping = ConfigTester.test(batch,
+                                Prefs.pingThreads(MainActivity.this),
+                                Prefs.pingTimeoutMs(MainActivity.this),
+                                new ConfigTester.Listener() {
+                                    @Override public void onProgress(int done, int total, int ok,
+                                                                     int failed) {
+                                        if (done % 100 == 0 || done == total) {
+                                            uiLog("  пинг " + done + "/" + total
+                                                    + " → живых " + ok + ", мёртвых " + failed);
+                                        }
+                                    }
+                                });
+                        pinged += batch.size();
+                        if (ping.cancelled) {
+                            uiLog("Сбор остановлен");
+                            break;
+                        }
+                        alive += ping.alive.size();
+                        uiLog("  пинг: " + ping.summary());
+                        if (ping.alive.isEmpty()) continue;
+
+                        // 2.2) к замеру — без свежих замеров из пула (их не гоняем заново)
+                        List<ProxyConfig> work = new ArrayList<>();
+                        long now = System.currentTimeMillis();
+                        for (ProxyConfig cfg : ping.alive) {
+                            String key = ConfigRepository.canonicalKey(cfg.raw);
+                            Pool.Entry old = key == null ? null : pool.get(key);
+                            if (old != null && old.at > 0 && now - old.at < POOL_REUSE_MS) {
+                                reused++;
+                                continue;
+                            }
+                            work.add(cfg);
+                        }
+                        if (work.isEmpty()) {
+                            uiLog("  все живые уже замерены меньше "
+                                    + (POOL_REUSE_MS / 3600000) + " ч назад — пропускаю пакет");
                             continue;
                         }
-                        if (old.at > 0 && now - old.at < POOL_REUSE_MS) {
-                            // недавно замерен и всё ещё пингуется — оставляем как есть
-                            synchronized (found) {
-                                found.add(old);
-                            }
-                            reused++;
-                        } else {
-                            known.add(cfg);
-                        }
-                    }
-                    if (reused > 0) {
-                        uiLog("Замеры из пула свежие (< " + (POOL_REUSE_MS / 3600000) + " ч): "
-                                + reused + " конфигов не перемеряю");
-                    }
-                    List<ProxyConfig> ordered = new ArrayList<>(fresh);
-                    ordered.addAll(known);
-                    List<ProxyConfig> testList = ordered;
-                    if (testList.size() > MAX_SPEED_TESTS) {
-                        uiLog("К замеру " + ordered.size() + " — меряю первые "
-                                + MAX_SPEED_TESTS + " (новые вперёд)");
-                        testList = new ArrayList<>(ordered.subList(0, MAX_SPEED_TESTS));
-                    }
-                    final List<ProxyConfig> work = testList;
-                    final int min = Prefs.minSpeedKbps(MainActivity.this);
-                    final String minText = Prefs.minSpeedText(MainActivity.this);
-                    final int total = work.size();
-                    final int lanes = Prefs.speedLanes(MainActivity.this);
-                    uiLog("Меряю скорость у " + total + " живых параллельно: " + lanes
-                            + " ядра, порог " + minText
-                            + " (остановлюсь на " + POOL_ENOUGH + " рабочих)");
 
-                    // «Дорожки»: каждая — свой экземпляр Xray. Считаем только НОВЫЕ
-                    // удачные замеры: переиспользованные из пула не должны останавливать
-                    // замер раньше времени.
-                    final AtomicInteger cursor = new AtomicInteger();
-                    final AtomicInteger done = new AtomicInteger();
-                    final AtomicInteger measuredOk = new AtomicInteger();
-                    ExecutorService lane = Executors.newFixedThreadPool(lanes);
-                    for (int i = 0; i < lanes; i++) {
-                        lane.execute(new Runnable() {
-                            @Override public void run() {
-                                for (;;) {
-                                    if (ConfigRepository.isCancelled()) break;
-                                    if (measuredOk.get() >= POOL_ENOUGH) break;
-                                    int idx = cursor.getAndIncrement();
-                                    if (idx >= total) break;
-                                    ProxyConfig cfg = work.get(idx);
-                                    Probe.Result r = Probe.measureConfig(MainActivity.this, cfg,
-                                            Prefs.gateTimeoutMs(MainActivity.this));
-                                    boolean passed = r.ok && r.kbps >= min;
-                                    if (passed) {
-                                        measuredOk.incrementAndGet();
-                                        Blacklist.forget(MainActivity.this, cfg.raw);
-                                        synchronized (found) {
-                                            found.add(new Pool.Entry(cfg.raw, r.kbps,
-                                                    cfg.latency, System.currentTimeMillis()));
-                                        }
-                                    } else {
-                                        bump(why, r.reason);
-                                        // Ядро не поднялось / данных нет — конфиг в чёрный
-                                        // список: в следующий раз его даже не пингуем.
-                                        if (r.hard) Blacklist.add(MainActivity.this, cfg, r.reason);
-                                    }
-                                    int d = done.incrementAndGet();
-                                    if (d % 5 == 0 || d == total || passed) {
-                                        uiLog("скорость " + d + "/" + total
-                                                + " · рабочих " + found.size()
-                                                + (passed ? " · +" + Prefs.speedText(r.kbps)
-                                                           : " · " + truncate(cfg.name, 24)
-                                                             + ": " + r.reason));
-                                    }
-                                }
-                            }
-                        });
-                    }
-                    lane.shutdown();
-                    lane.awaitTermination(2, TimeUnit.HOURS);
+                        final List<ProxyConfig> failed =
+                                java.util.Collections.synchronizedList(new ArrayList<ProxyConfig>());
+                        int added = measureBatch(work, pool, why, failed);
+                        measuredOk += added;
 
-                    // 2.5) DPI-обход для тех, кто не дал данных напрямую. Параллельно
-                    // нельзя: ciadpi один, поэтому по очереди и с ограничением. Успех
-                    // запоминается в пул вместе со стратегией — при подключении возьмём её.
-                    if (!ConfigRepository.isCancelled() && Prefs.desyncLine(MainActivity.this)
-                            && measuredOk.get() < POOL_ENOUGH) {
-                        final String strategy = Prefs.dpiStrategyFor(MainActivity.this);
-                        java.util.Set<String> okKeys = new java.util.HashSet<>();
-                        synchronized (found) {
-                            for (Pool.Entry e : found) {
-                                String k = ConfigRepository.canonicalKey(e.raw);
-                                if (k != null) okKeys.add(k);
+                        // 2.3) тем, кто не дал данных напрямую, — одна попытка через ciadpi.
+                        // Бюджет общий на весь сбор: DpiStrategies.PROBE держит один процесс.
+                        if (dpiBudget > 0 && !failed.isEmpty()
+                                && !ConfigRepository.isCancelled()) {
+                            List<ProxyConfig> retry;
+                            synchronized (failed) {
+                                retry = new ArrayList<>(failed);
                             }
+                            int[] dpi = retryWithDpi(retry, pool, why, dpiBudget);
+                            dpiBudget -= dpi[0];
+                            measuredOk += dpi[1];
                         }
-                        int tried = 0;
-                        for (ProxyConfig cfg : work) {
-                            if (ConfigRepository.isCancelled()) break;
-                            if (tried >= DPI_RETRIES || measuredOk.get() >= POOL_ENOUGH) break;
-                            String key = ConfigRepository.canonicalKey(cfg.raw);
-                            if (key != null && okKeys.contains(key)) continue;
-                            tried++;
-                            uiLog("DPI-обход: " + truncate(cfg.name, 26) + " через "
-                                    + DpiStrategies.shorten(strategy));
-                            Probe.Result r = Probe.measureConfig(MainActivity.this, cfg,
-                                    Prefs.gateTimeoutMs(MainActivity.this), strategy);
-                            if (r.ok && r.kbps >= min) {
-                                measuredOk.incrementAndGet();
-                                Blacklist.forget(MainActivity.this, cfg.raw);
-                                DpiStrategies.rememberWorking(MainActivity.this, strategy);
-                                synchronized (found) {
-                                    found.add(new Pool.Entry(cfg.raw, r.kbps, cfg.latency,
-                                            System.currentTimeMillis(), strategy));
-                                }
-                                uiLog("  + через DPI: " + Prefs.speedText(r.kbps) + " · "
-                                        + DpiStrategies.shorten(strategy));
-                            } else {
-                                bump(why, r.reason);
-                                if (r.hard) Blacklist.add(MainActivity.this, cfg, r.reason);
-                                uiLog("  → через DPI не прошёл · " + r.reason);
-                            }
-                        }
-                        if (tried > 0) {
-                            uiLog("DPI-обход: проверено " + tried + ", рабочих в пуле "
-                                    + found.size());
-                        }
+
+                        // 2.4) сохраняем прогресс после каждого пакета: если пользователь
+                        // остановит сбор, уже найденное останется в пуле.
+                        Pool.save(MainActivity.this, snapshot(pool));
+                        uiLog("Пакет " + batchNo + " готов: +" + added + " рабочих, в пуле "
+                                + pool.size() + " (проверено " + pinged + ", живых " + alive + ")");
                     }
 
-                    List<Pool.Entry> snapshot;
-                    synchronized (found) {
-                        snapshot = new ArrayList<>(found);
-                    }
-                    if (snapshot.isEmpty() && !work.isEmpty()
-                            && !ConfigRepository.isCancelled()) {
-                        uiLog("Параллельный замер не дал рабочих (канал делится на дорожки) — "
-                                + "проверяю первые 20 по одному…");
-                        List<Pool.Entry> again = Probe.measureSequential(MainActivity.this, work, 20);
-                        snapshot.addAll(again);
+                    List<Pool.Entry> snapshot = snapshot(pool);
+                    if (snapshot.size() == poolAtStart && !ConfigRepository.isCancelled()
+                            && !all.isEmpty()) {
+                        uiLog("Пакетный замер не дал новых рабочих — проверяю первые 20 по одному…");
+                        int upto = Math.min(20, all.size());
+                        List<Pool.Entry> again = Probe.measureSequential(MainActivity.this,
+                                new ArrayList<>(all.subList(0, upto)), upto);
+                        for (Pool.Entry e : again) {
+                            String key = ConfigRepository.canonicalKey(e.raw);
+                            if (key != null) pool.put(key, e);
+                        }
+                        snapshot = snapshot(pool);
                         uiLog("По одному: рабочих " + again.size());
                     }
                     Pool.save(MainActivity.this, snapshot);
                     logWhy(why);
+                    if (reused > 0) {
+                        uiLog("Не перемерял свежие замеры: " + reused + " конфигов");
+                    }
                     final int n = snapshot.size();
                     final long best = n > 0 ? Pool.bestKbps(MainActivity.this) : -1;
-                    uiLog("Пул собран: " + n + " рабочих из " + ping.alive.size() + " живых"
-                            + (best > 0 ? ", лучший " + Prefs.speedText(best) : "")
-                            + ". Порог: " + minText);
+                    uiLog("Пул собран: " + n + " рабочих · пинг " + pinged + " · живых "
+                            + alive + " · замеров " + measuredOk
+                            + (best > 0 ? " · лучший " + Prefs.speedText(best) : "")
+                            + ". Порог: " + Prefs.minSpeedText(MainActivity.this));
                     runOnUiThread(new Runnable() {
                         @Override public void run() {
                             toast("Пул: " + n + " рабочих"
@@ -1007,6 +934,127 @@ public class MainActivity extends Activity {
                 }
             }
         }, "build-pool").start();
+    }
+
+    private static List<Pool.Entry> snapshot(Map<String, Pool.Entry> pool) {
+        synchronized (pool) {
+            return new ArrayList<>(pool.values());
+        }
+    }
+
+    private int poolSize(Map<String, Pool.Entry> pool) {
+        synchronized (pool) {
+            return pool.size();
+        }
+    }
+
+    /**
+     * Замер пакета «дорожками»: каждая — свой экземпляр ядра Xray.
+     * Найденное сразу складывается в {@code pool}; непрошедшие напрямую попадают в
+     * {@code failed} — им потом даётся одна попытка через DPI-обход.
+     */
+    private int measureBatch(final List<ProxyConfig> work,
+                             final Map<String, Pool.Entry> pool,
+                             final Map<String, Integer> why,
+                             final List<ProxyConfig> failed) {
+        final int lanes = Prefs.speedLanes(this);
+        final int min = Prefs.minSpeedKbps(this);
+        final int total = work.size();
+        final AtomicInteger cursor = new AtomicInteger();
+        final AtomicInteger done = new AtomicInteger();
+        final AtomicInteger okCount = new AtomicInteger();
+        ExecutorService lane = Executors.newFixedThreadPool(lanes);
+        for (int i = 0; i < lanes; i++) {
+            lane.execute(new Runnable() {
+                @Override public void run() {
+                    for (;;) {
+                        if (ConfigRepository.isCancelled()) break;
+                        int idx = cursor.getAndIncrement();
+                        if (idx >= total) break;
+                        ProxyConfig cfg = work.get(idx);
+                        Probe.Result r = Probe.measureConfig(MainActivity.this, cfg,
+                                Prefs.gateTimeoutMs(MainActivity.this));
+                        boolean passed = r.ok && r.kbps >= min;
+                        if (passed) {
+                            okCount.incrementAndGet();
+                            Blacklist.forget(MainActivity.this, cfg.raw);
+                            String key = ConfigRepository.canonicalKey(cfg.raw);
+                            Pool.Entry e = new Pool.Entry(cfg.raw, r.kbps, cfg.latency,
+                                    System.currentTimeMillis());
+                            synchronized (pool) {
+                                if (key != null) pool.put(key, e);
+                            }
+                        } else {
+                            bump(why, r.reason);
+                            // Ядро не поднялось / данных нет — в чёрный список: в следующий
+                            // раз его даже не пингуем. «Мягкие» отказы — кандидаты на DPI.
+                            if (r.hard) {
+                                Blacklist.add(MainActivity.this, cfg, r.reason);
+                            } else {
+                                synchronized (failed) {
+                                    failed.add(cfg);
+                                }
+                            }
+                        }
+                        int d = done.incrementAndGet();
+                        if (d % 10 == 0 || d == total || passed) {
+                            uiLog("  скорость " + d + "/" + total + " · рабочих "
+                                    + poolSize(pool)
+                                    + (passed ? " · +" + Prefs.speedText(r.kbps)
+                                              : " · " + truncate(cfg.name, 24) + ": " + r.reason));
+                        }
+                    }
+                }
+            });
+        }
+        lane.shutdown();
+        try {
+            lane.awaitTermination(2, TimeUnit.HOURS);
+        } catch (InterruptedException ignored) {
+        }
+        return okCount.get();
+    }
+
+    /**
+     * Попытка поднять непрошедшие конфиги через линию ciadpi.
+     * Возвращает {сколько попыток потрачено, сколько заработало}.
+     */
+    private int[] retryWithDpi(List<ProxyConfig> failed,
+                               Map<String, Pool.Entry> pool,
+                               Map<String, Integer> why,
+                               int budget) {
+        if (!Prefs.desyncLine(this) || budget <= 0 || failed.isEmpty()) {
+            return new int[]{0, 0};
+        }
+        final String strategy = Prefs.dpiStrategyFor(this);
+        final int min = Prefs.minSpeedKbps(this);
+        int tried = 0;
+        int ok = 0;
+        for (ProxyConfig cfg : failed) {
+            if (ConfigRepository.isCancelled() || tried >= budget) break;
+            tried++;
+            uiLog("DPI-обход: " + truncate(cfg.name, 26) + " через "
+                    + DpiStrategies.shorten(strategy));
+            Probe.Result r = Probe.measureConfig(this, cfg, Prefs.gateTimeoutMs(this), strategy);
+            if (r.ok && r.kbps >= min) {
+                ok++;
+                Blacklist.forget(this, cfg.raw);
+                DpiStrategies.rememberWorking(this, strategy);
+                String key = ConfigRepository.canonicalKey(cfg.raw);
+                Pool.Entry e = new Pool.Entry(cfg.raw, r.kbps, cfg.latency,
+                        System.currentTimeMillis(), strategy);
+                synchronized (pool) {
+                    if (key != null) pool.put(key, e);
+                }
+                uiLog("  + через DPI: " + Prefs.speedText(r.kbps) + " · "
+                        + DpiStrategies.shorten(strategy));
+            } else {
+                bump(why, r.reason);
+                if (r.hard) Blacklist.add(this, cfg, r.reason);
+                uiLog("  → через DPI не прошёл · " + r.reason);
+            }
+        }
+        return new int[]{tried, ok};
     }
 
     /** +1 к счётчику причин отказа (ключ — человеческая причина из Probe). */

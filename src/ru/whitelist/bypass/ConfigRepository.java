@@ -183,6 +183,45 @@ public final class ConfigRepository {
         return new ArrayList<>(map.values());
     }
 
+    /**
+     * Вычеркнуть из скачанного хранилища всё, что лежит в чёрном списке.
+     *
+     * Зачем: списки приходят целиком каждое обновление, и «мёртвые» конфиги возвращались
+     * бы в них снова и снова — их пришлось бы каждый раз пинговать и мерить заново.
+     * После чистки сбор пула видит только то, что ещё не доказало свою непригодность.
+     * Записи в чёрном списке живут неделю, поэтому через TTL конфиг может вернуться.
+     *
+     * @return сколько строк убрано
+     */
+    public static synchronized int dropBlacklisted(Context c) {
+        java.util.Set<String> bad = Blacklist.keys(c);
+        if (bad.isEmpty()) return 0;
+        File f = configsFile(c);
+        if (!f.isFile()) return 0;
+        List<String> lines = readLines(f);
+        if (lines.isEmpty()) return 0;
+        List<String> keep = new ArrayList<>();
+        int removed = 0;
+        for (String line : lines) {
+            ProxyConfig p = ProxyConfig.parse(line, "скачано", false);
+            String key = p == null ? canonicalKey(line) : canonicalKey(p.raw);
+            if (key != null && bad.contains(key)) {
+                removed++;
+                continue;
+            }
+            keep.add(line);
+        }
+        if (removed == 0) return 0;
+        StringBuilder sb = new StringBuilder();
+        for (String line : keep) sb.append(line).append('\n');
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(f, false)) {
+            out.write(sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Exception ignored) {
+            return 0;
+        }
+        return removed;
+    }
+
     public static int countDownloaded(Context c) {
         return readLines(configsFile(c)).size();
     }
@@ -441,7 +480,7 @@ public final class ConfigRepository {
             conn.setConnectTimeout(connectTimeout);
             conn.setReadTimeout(readTimeout);
             conn.setInstanceFollowRedirects(true);
-            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.1.13");
+            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.1.14");
             conn.setRequestProperty("Accept", "text/plain, */*");
 
             int code;

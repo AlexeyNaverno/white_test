@@ -1,0 +1,6 @@
+• "Switch" no longer gets stuck on two configs: it walks the whole pool from the current one and continues from there on the next press.
+• The home screen fits in one screen without scrolling; the log is more compact, hidden by default and takes only the remaining space.
+• Pool building now works in batches of 200 random configs from all lists, subtracts the blacklist from downloaded data and continues until every list is scanned; progress is saved after each batch.
+• In "Working configs", configs that fail a check are removed automatically (when the network itself answers) and blacklisted for 7 days.
+• Faster scanning: 6 speed-test lanes and 192 ping threads by default, tuned for 8-core phones such as Snapdragon 865 / 7 Gen 3 / 6 Gen 4 / Dimensity 7350.
+• Tor tab: "Enable Tor bridges as VPN" — a separate mode that does not wait for configs to fail.

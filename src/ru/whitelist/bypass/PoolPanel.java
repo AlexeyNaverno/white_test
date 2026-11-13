@@ -190,6 +190,12 @@ public final class PoolPanel {
         p2.topMargin = Ui.dp(act, Ui.S2);
         tools.addView(measureAll, p2);
 
+        TextView autoNote = Ui.caption(act, "Провалившиеся проверку удаляются из рабочих "
+                + "автоматически и на 7 дней попадают в чёрный список. Если не отвечает "
+                + "ни одна посторонняя цель, сеть считается виноватой и ничего не удаляется.");
+        autoNote.setPadding(0, Ui.dp(act, Ui.S2), 0, 0);
+        tools.addView(autoNote);
+
         Button reload = Ui.ghost(act, "Обновить список");
         reload.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { refresh(); }
@@ -634,6 +640,67 @@ public final class PoolPanel {
         refresh();
     }
 
+    /**
+     * Убрать из рабочих всех, кто провалил последнюю проверку.
+     *
+     * Раньше для этого нужно было нажать отдельную кнопку внизу. Теперь чистка идёт сама
+     * после «Пропинговать все» и «Перемерить у всех»: пул — это «рабочие», и оставлять
+     * в нём то, что только что не ответило, бессмысленно.
+     *
+     * Защита от ложного срабатывания: если не отвечает вообще ничего и при этом не
+     * пингуется ни одна посторонняя цель, виновата сеть, а не конфиги, — тогда не
+     * удаляем никого.
+     */
+    private void autoCleanFailed(final String why) {
+        if (failed.isEmpty()) return;
+        final List<Pool.Entry> dead = entryList(failed);
+        if (dead.isEmpty()) {
+            failed.clear();
+            updateBlacklistButton();
+            return;
+        }
+        final String target = net;
+        status.setText("Проверяю, жива ли сеть, прежде чем удалять " + dead.size() + " конфигов…");
+        new Thread(new Runnable() {
+            @Override public void run() {
+                final boolean netAlive = networkAnswers();
+                ui.post(new Runnable() {
+                    @Override public void run() {
+                        if (act.isFinishing()) return;
+                        if (!netAlive) {
+                            status.setText("");
+                            toast("Сеть не отвечает — никого не удаляю, проверьте подключение");
+                            return;
+                        }
+                        int n = 0;
+                        for (Pool.Entry e : dead) {
+                            ProxyConfig cfg = e.cfg();
+                            if (cfg != null) Blacklist.add(act, cfg, why);
+                            Pool.remove(act, target, e.raw);
+                            n++;
+                        }
+                        failed.clear();
+                        updateBlacklistButton();
+                        status.setText("Удалено из рабочих: " + n);
+                        toast("Удалено из рабочих: " + n + " · в чёрном списке на 7 дней");
+                        refresh();
+                    }
+                });
+            }
+        }, "pool-autoclean").start();
+    }
+
+    /** Есть ли вообще интернет: пять целей TCP-пинга, синхронно. */
+    private boolean networkAnswers() {
+        try {
+            NetChecker.PingStats st = NetChecker.pingAll(
+                    Prefs.pingTargets(act), Prefs.pingTimeoutMs(act));
+            return st.ok > 0;
+        } catch (Throwable t) {
+            return true;    // не смогли проверить — не мешаем чистке
+        }
+    }
+
     // ------------------------------------------------------------------ массовые действия
 
     private void pingAll() {
@@ -699,6 +766,9 @@ public final class PoolPanel {
                         updateBlacklistButton();
                         updateSummary(Pool.count(act, net));
                         toast("Пинг: живых " + out.alive.size() + " из " + out.total);
+                        // Всё, что не ответило, уходит из рабочих сразу: держать в «рабочих»
+                        // заведомо мёртвое — значит снова и снова натыкаться на него.
+                        autoCleanFailed("не ответил на пинг");
                     }
                 });
             }
@@ -786,6 +856,9 @@ public final class PoolPanel {
                         setBusy(false);
                         toast("Замер: рабочих " + okCount.get() + " из " + total);
                         refresh();
+                        // «Если все нерабочие — удалять все»: провалившиеся проверку
+                        // убираются из пула одной операцией, без отдельной кнопки.
+                        autoCleanFailed("не прошёл перемер скорости");
                     }
                 });
             }
