@@ -83,8 +83,8 @@ public final class Presets {
             p.put(Prefs.GATE_TIMEOUT_MS, Prefs.DEFAULT_GATE_TIMEOUT_MS);
             p.put(Prefs.PING_TIMEOUT_MS, Prefs.DEFAULT_PING_TIMEOUT_MS);
             p.put(Prefs.SWITCH_TIMEOUT_SEC, Prefs.DEFAULT_SWITCH_TIMEOUT_SEC);
-            p.put(Prefs.PING_THREADS, 60);
-            p.put(Prefs.SPEED_LANES, 4);
+            p.put(Prefs.PING_THREADS, Prefs.defaultPingThreads());
+            p.put(Prefs.SPEED_LANES, Prefs.defaultSpeedLanes());
             p.put(Prefs.MONITOR_INTERVAL_SEC, 15);
             p.put(Prefs.AUTO_SWITCH, true);
             p.put(Prefs.BOOT_CONNECT, false);
@@ -179,8 +179,8 @@ public final class Presets {
             p.put(Prefs.GATE_TIMEOUT_MS, 1500);
             p.put(Prefs.PING_TIMEOUT_MS, 1000);
             p.put(Prefs.SWITCH_TIMEOUT_SEC, 45);
-            p.put(Prefs.PING_THREADS, 60);
-            p.put(Prefs.SPEED_LANES, 4);
+            p.put(Prefs.PING_THREADS, Prefs.defaultPingThreads());
+            p.put(Prefs.SPEED_LANES, Prefs.defaultSpeedLanes());
             p.put(Prefs.MONITOR_INTERVAL_SEC, 15);
             p.put(Prefs.AUTO_SWITCH, true);
             p.put(Prefs.BOOT_CONNECT, false);
@@ -230,8 +230,8 @@ public final class Presets {
             p.put(Prefs.GATE_TIMEOUT_MS, 4000);
             p.put(Prefs.PING_TIMEOUT_MS, 2000);
             p.put(Prefs.SWITCH_TIMEOUT_SEC, 30);
-            p.put(Prefs.PING_THREADS, 40);
-            p.put(Prefs.SPEED_LANES, 2);
+            p.put(Prefs.PING_THREADS, Prefs.defaultPingThreads());
+            p.put(Prefs.SPEED_LANES, Prefs.defaultSpeedLanes());
             p.put(Prefs.MONITOR_INTERVAL_SEC, 20);
             p.put(Prefs.AUTO_SWITCH, true);
             p.put(Prefs.BOOT_CONNECT, false);

@@ -65,6 +65,8 @@ public class BypassVpnService extends VpnService {
     private static final int XRAY_PORT = 10811;
     /** Сколько конфигов из пула пробуем за одно подключение. */
     private static final int MAX_ATTEMPTS = 6;
+    /** Попыток за одно нажатие «Переключить»; курсор продолжает со следующего нажатия. */
+    private static final int MAX_SWITCH_TRIES = 3;
     /** Допуск при повторной проверке скорости: 80% от порога (сеть «дышит»). */
     private static final double MIN_SPEED_TOLERANCE = 0.8;
     /** Сколько конфигов проверяем «вживую» при быстром поиске. */
@@ -110,6 +112,10 @@ public class BypassVpnService extends VpnService {
     private volatile String forcedRaw = null;
     /** Режим «только DPI»: TUN смотрит в локальный ciadpi, ядро Xray не запускается. */
     private volatile boolean dpiOnly = false;
+    /** Запуск «Tor как VPN»: поднят по кнопке, а не как резерв после отказа. */
+    private volatile boolean torRequested = false;
+    /** Курсор переключения: каждое нажатие «Переключить» идёт дальше по пулу. */
+    private int switchCursor = 0;
     /** Порт локального SOCKS ciadpi в режиме «только DPI». */
     private volatile int dpiOnlyPort = 0;
 
@@ -191,11 +197,17 @@ public class BypassVpnService extends VpnService {
             final String startMode = intent.getStringExtra(EXTRA_START_MODE);
             final String raw = intent.getStringExtra(EXTRA_FORCE_RAW);
             prepareStart(startMode, raw);
-            sendStatus("connecting", MODE_DPI.equals(startMode)
-                    ? "Поднимаю DPI-обход…" : "Запуск…");
+            if (MODE_DPI.equals(startMode)) {
+                sendStatus("connecting", "Поднимаю DPI-обход…");
+            } else if (MODE_TOR.equals(startMode)) {
+                sendStatus("connecting", "Поднимаю Tor-мосты как VPN…");
+            } else {
+                sendStatus("connecting", "Запуск…");
+            }
             Thread starter = new Thread(new Runnable() {
                 @Override public void run() {
-                    if (dpiOnly) startDpiWorker();
+                    if (torRequested) startTorWorker();
+                    else if (dpiOnly) startDpiWorker();
                     else startWorker();
                 }
             }, "bypass-start");
@@ -212,9 +224,10 @@ public class BypassVpnService extends VpnService {
         if (running.get() || tun != null) resetEngine();   // повторный старт = перезапуск
         dpiAutotuned = false;
         dpiOnly = MODE_DPI.equals(startMode);
+        torRequested = MODE_TOR.equals(startMode);
         forcedRaw = raw;
         torMode = false;
-        currentMode = dpiOnly ? MODE_DPI : MODE_XRAY;
+        currentMode = torRequested ? MODE_TOR : (dpiOnly ? MODE_DPI : MODE_XRAY);
         localSocksPort = XRAY_PORT;
         stopRequested.set(false);
         ConfigRepository.clearCancel();
@@ -272,6 +285,22 @@ public class BypassVpnService extends VpnService {
         } catch (Throwable t) {
             Log.e(TAG, "режим «только DPI» не запустился", t);
             fail(t.getMessage() != null ? t.getMessage() : "Ошибка запуска");
+        }
+    }
+
+    /**
+     * «Tor как VPN»: канал сразу через мосты, без перебора конфигов.
+     *
+     * Отличие от резервного режима только в причине запуска: там Tor поднимается после
+     * того, как отказали все конфиги, здесь — по кнопке в настройках. Дальше всё общее:
+     * проверка скорости через Tor, TUN, монитор.
+     */
+    private void startTorWorker() {
+        sendStatus("connecting", "Поднимаю Tor-мосты как VPN…");
+        if (!bringUpTor("Tor-мост включён как VPN", true)) {
+            String e = lastError;
+            if (e == null || e.isEmpty()) e = "Tor-мосты не поднялись";
+            fail(e);
         }
     }
 
@@ -387,8 +416,20 @@ public class BypassVpnService extends VpnService {
      * true — резерв поднят, сервис уже в режиме «включено» (дальше вызывающему делать
      * нечего); false — резерв недоступен, причину пишем в {@link #lastError}.
      */
+    /** Резервный Tor после отказа всех конфигов. */
     private boolean tryTorFallback(String why) {
-        if (!Prefs.torFallback(this)) {
+        return bringUpTor(why, false);
+    }
+
+    /**
+     * Поднять Tor с мостами как канал.
+     *
+     * @param manual true — нажали «Tor как VPN» в настройках: переключатель «резерв Tor»
+     *               не проверяем, человек сам этого попросил. false — резерв после того,
+     *               как ни один конфиг не ответил (тогда нужен tor_fallback).
+     */
+    private boolean bringUpTor(String why, boolean manual) {
+        if (!manual && !Prefs.torFallback(this)) {
             lastError = why + ". Резерв Tor выключен в настройках";
             return false;
         }
@@ -396,7 +437,8 @@ public class BypassVpnService extends VpnService {
             lastError = "Остановлено пользователем";
             return false;
         }
-        Log.i(TAG, "VPN не отвечает (" + why + ") — пробую Tor-мосты");
+        Log.i(TAG, manual ? ("Включаю Tor как VPN: " + why)
+                : ("VPN не отвечает (" + why + ") — пробую Tor-мосты"));
         // Кнопка становится фиолетовой сразу, как только начали пробовать резерв:
         // пользователь должен видеть, что сейчас происходит не обычное подключение.
         currentMode = MODE_TOR;
@@ -902,17 +944,36 @@ public class BypassVpnService extends VpnService {
             return;
         }
         ProxyConfig previous = currentConfig;
-        List<Pool.Entry> list = connectCandidates(6);
+        // Весь пул, а не первые 6: «Переключить» должно постепенно проходить все конфиги.
+        List<Pool.Entry> list = connectCandidates(Integer.MAX_VALUE);
         String currentRaw = previous != null ? previous.raw : "";
         boolean wasTor = torMode;
+
+        // Идём от текущего конфига вперёд и запоминаем курсор: следующее нажатие
+        // продолжит дальше, а после конца пула начнёт сначала. Иначе кнопка всегда
+        // пробовала два самых быстрых — и при живом первом конфиге не переключала вовсе.
+        int size = list.size();
+        int start = 0;
+        if (size > 0) {
+            int currentIdx = -1;
+            for (int i = 0; i < size; i++) {
+                if (list.get(i).raw.equals(currentRaw)) {
+                    currentIdx = i;
+                    break;
+                }
+            }
+            start = currentIdx >= 0 ? currentIdx + 1 : Math.min(switchCursor, size - 1);
+            if (start >= size) start = 0;
+        }
         int tried = 0;
-        for (Pool.Entry entry : list) {
+        for (int k = 0; k < size && tried < MAX_SWITCH_TRIES; k++) {
+            Pool.Entry entry = list.get((start + k) % size);
             ProxyConfig cfg = entry.cfg();
             if (cfg == null) continue;
             if (stopRequested.get()) return;
-            if (cfg.raw.equals(currentRaw)) continue;
-            if (tried >= 3) break;
+            if (cfg.raw.equals(currentRaw) && tried == 0) continue;   // куда переключаться — начиная со следующего
             tried++;
+            switchCursor = (start + k + 1) % size;
             sendStatus("connecting", "Переключаюсь: " + truncate(cfg.name, 42) + "…");
             boolean ok;
             if (!entry.dpi.isEmpty()) {
@@ -928,6 +989,7 @@ public class BypassVpnService extends VpnService {
                     // на локальный SOCKS ядра, иначе туннель остался бы на Tor.
                     TorTunnel.stop(this);
                     torMode = false;
+                    torRequested = false;
                     currentMode = MODE_XRAY;
                     localSocksPort = XRAY_PORT;
                     teardownTunnel();
@@ -1040,6 +1102,8 @@ public class BypassVpnService extends VpnService {
         stopRequested.set(true);
         running.set(false);
         paused = false;
+        torRequested = false;
+        switchCursor = 0;
         currentSocksPort = -1;
         currentDetail = "";
         if (monitorThread != null) {

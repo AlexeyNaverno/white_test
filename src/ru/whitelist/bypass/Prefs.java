@@ -270,8 +270,25 @@ public final class Prefs {
 
     // --- проверки ---
 
+    /**
+     * Сколько TCP/TLS-пингов одновременно.
+     *
+     * Значение подобрано под восьмиядерные телефоны целевого уровня (Snapdragon 865,
+     * Snapdragon 7 Gen 3, Snapdragon 6 Gen 4, Dimensity 7350): пинг упирается не в CPU,
+     * а в ожидание ответа, поэтому 24 сокета на ядро безопасны. 192 на восьми ядрах —
+     * 2000 конфигов проверяются заметно быстрее, а память почти не тратится.
+     */
     public static int pingThreads(Context c) {
-        return clamp(get(c).getInt(PING_THREADS, 60), 1, 200);
+        return clamp(get(c).getInt(PING_THREADS, defaultPingThreads()), 1, MAX_PING_THREADS);
+    }
+
+    /** Потолок одновременных пингов: 32 сокета на ядро, но не больше 256. */
+    public static final int MAX_PING_THREADS = 256;
+
+    /** 192 на восьми ядрах (целевые SoC), меньше — на слабых устройствах. */
+    public static int defaultPingThreads() {
+        int cores = Math.max(1, Runtime.getRuntime().availableProcessors());
+        return clamp(cores * 24, 32, MAX_PING_THREADS);
     }
 
     /**
@@ -300,9 +317,24 @@ public final class Prefs {
         return out;
     }
 
-    /** Сколько экземпляров ядра мерить скорость параллельно. */
+    /** Потолок одновременных экземпляров ядра: по одному на ядро, но не больше 8. */
+    public static final int MAX_SPEED_LANES = 8;
+
+    /**
+     * Сколько экземпляров ядра мерить скорость параллельно.
+     *
+     * Каждая «дорожка» — отдельный процесс Xray (десятки мегабайт). На восьмиядерных
+     * целевых SoC шесть дорожек дают почти линейное ускорение перебора и остаются в
+     * пределах памяти; восемь — максимум, дальше упираемся в канал и в GC ядра.
+     */
     public static int speedLanes(Context c) {
-        return clamp(get(c).getInt(SPEED_LANES, 4), 1, 4);
+        return clamp(get(c).getInt(SPEED_LANES, defaultSpeedLanes()), 1, MAX_SPEED_LANES);
+    }
+
+    /** 6 на восьми ядрах (целевые SoC), меньше — на устройствах послабее. */
+    public static int defaultSpeedLanes() {
+        int cores = Math.max(2, Runtime.getRuntime().availableProcessors());
+        return clamp(cores - 2, 2, 6);
     }
 
     /** «512 КБ/с (4096 кбит/с)» — чтобы единицы не путались. */
@@ -564,6 +596,25 @@ public final class Prefs {
             p.edit().putBoolean("migrated_blacklist_v20", true).apply();
         }
         migrateToStandardPreset(c);
+        migrateFasterDefaults(c);
+    }
+
+    /**
+     * 0.1.14: перебор стал параллельнее. У кого в настройках остались СТАРЫЕ значения по
+     * умолчанию (4 дорожки, 60 потоков пинга), переводим на новые (6 и 192): именно эти
+     * числа рассчитаны на целевые восьмиядерные телефоны. Если человек выставлял свои —
+     * не трогаем: это осознанный выбор.
+     */
+    private static void migrateFasterDefaults(Context c) {
+        SharedPreferences p = get(c);
+        if (p.getBoolean("migrated_speed_v3", false)) return;
+        SharedPreferences.Editor e = p.edit();
+        int lanes = p.getInt(SPEED_LANES, 0);
+        if (lanes == 0 || lanes == 4) e.putInt(SPEED_LANES, defaultSpeedLanes());
+        int threads = p.getInt(PING_THREADS, 0);
+        if (threads == 0 || threads == 60) e.putInt(PING_THREADS, defaultPingThreads());
+        e.putBoolean("migrated_speed_v3", true);
+        e.apply();
     }
 
     /**

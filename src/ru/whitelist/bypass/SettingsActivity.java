@@ -196,7 +196,9 @@ public class SettingsActivity extends Activity {
                 + "до 512 или 1024.");
 
         editLanes = numberField(String.valueOf(Prefs.speedLanes(this)));
-        label("Сколько ядер мерить скорость одновременно (1–4, по умолчанию 4)", Help.SPEED_LANES);
+        label("Сколько ядер мерить скорость одновременно (1–"
+                + Prefs.MAX_SPEED_LANES + ", по умолчанию " + Prefs.defaultSpeedLanes()
+                + " на этом телефоне)", Help.SPEED_LANES);
         add(editLanes);
 
         editSpeedUrls = multiField(Prefs.join(Prefs.speedUrls(this)), 3);
@@ -218,7 +220,9 @@ public class SettingsActivity extends Activity {
         // --- поиск ---
         section("Поиск и пинг");
         editThreads = numberField(String.valueOf(Prefs.pingThreads(this)));
-        label("Потоков пинга одновременно", Help.PING_THREADS);
+        label("Потоков пинга одновременно (до " + Prefs.MAX_PING_THREADS
+                + ", по умолчанию " + Prefs.defaultPingThreads()
+                + " на этом телефоне)", Help.PING_THREADS);
         add(editThreads);
         editTimeout = numberField(String.valueOf(Prefs.pingTimeoutMs(this)));
         label("Таймаут пинга, мс (2000 по умолчанию)", Help.PING_TIMEOUT_MS);
@@ -419,12 +423,39 @@ public class SettingsActivity extends Activity {
 
         // --- Tor ---
         section("Tor: мосты, резервный канал и списки");
-        note("Tor нужен в двух случаях: (1) прямые источники и jsDelivr не отдали списки — "
+        note("Tor нужен в трёх случаях: (1) прямые источники и jsDelivr не отдали списки — "
                 + "тогда Tor единственная дорога к ним; (2) ни один VPN-конфиг не отвечает — "
-                + "тогда трафик идёт через мосты (медленно, но связь есть). Обычным режимом "
-                + "Tor не включается.");
+                + "тогда трафик идёт через мосты (медленно, но связь есть); (3) вы сами "
+                + "включили «Tor как VPN» кнопкой ниже — без конфигов и без ожидания отказа.");
         swTorFallback = switchRow("Если VPN не отвечает — пускать трафик через Tor-мосты",
                 Prefs.torFallback(this), Help.TOR_FALLBACK);
+
+        // --- Tor как самостоятельный VPN: отдельный способ включения, не резерв
+        Button torAsVpn = smallButton("Включить Tor-мост как VPN");
+        torAsVpn.setTextColor(0xFFB388FF);
+        torAsVpn.setTextSize(15);
+        torAsVpn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                savePrefs();
+                VpnStart.connectTor(SettingsActivity.this);
+                toast("Поднимаю Tor-мосты как VPN — это может занять до минуты");
+            }
+        });
+        addAction(torAsVpn, "Tor как VPN", Help.TOR_AS_VPN);
+
+        Button torStop = smallButton("Остановить");
+        torStop.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                VpnStart.stop(SettingsActivity.this);
+                toast("Останавливаю");
+            }
+        });
+        addAction(torStop, "Остановить Tor", Help.TOR_AS_VPN);
+        note("Режим не зависит от переключателя выше: тот — автоматический резерв, а эта "
+                + "кнопка поднимает мосты сразу. Используются мосты из списка ниже (пусто — "
+                + "встроенные Vanilla), перед созданием туннеля скорость через Tor "
+                + "проверяется по тому же порогу. «Переключить» в уведомлении вернёт на "
+                + "обычный конфиг из пула, если он там есть.");
         editTorBridges = multiField(Prefs.torBridges(this), 4);
         label("Мосты (пусто — встроенные Vanilla)", Help.TOR_BRIDGES);
         add(editTorBridges);
@@ -1021,10 +1052,14 @@ public class SettingsActivity extends Activity {
                 Prefs.clamp(parseInt(editMinSpeed, Prefs.DEFAULT_MIN_SPEED_KBIT), 8, 160000));
         e.putInt(Prefs.GATE_TIMEOUT_MS,
                 Prefs.clamp(parseInt(editGateTimeout, Prefs.DEFAULT_GATE_TIMEOUT_MS), 800, 20000));
-        e.putInt(Prefs.PING_THREADS, Prefs.clamp(parseInt(editThreads, 60), 1, 200));
+        e.putInt(Prefs.PING_THREADS,
+                Prefs.clamp(parseInt(editThreads, Prefs.defaultPingThreads()), 1,
+                        Prefs.MAX_PING_THREADS));
         e.putInt(Prefs.PING_TIMEOUT_MS,
                 Prefs.clamp(parseInt(editTimeout, Prefs.DEFAULT_PING_TIMEOUT_MS), 300, 15000));
-        e.putInt(Prefs.SPEED_LANES, Prefs.clamp(parseInt(editLanes, 3), 1, 4));
+        e.putInt(Prefs.SPEED_LANES,
+                Prefs.clamp(parseInt(editLanes, Prefs.defaultSpeedLanes()), 1,
+                        Prefs.MAX_SPEED_LANES));
         e.putString(Prefs.PING_TARGETS, normalizeLines(editPingTargets.getText().toString()));
         e.putString(Prefs.HEALTH_URLS, normalizeLines(editHealthUrls.getText().toString()));
         e.putString(Prefs.DPI_STRATEGY, editStrategyLte.getText().toString().trim());
