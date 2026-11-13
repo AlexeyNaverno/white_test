@@ -13,6 +13,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.TextUtils;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
@@ -73,7 +74,11 @@ public class MainActivity extends Activity {
     /** Полный лог: в консоль попадает последнее, но история остаётся — её можно листать. */
     private final StringBuilder logBuffer = new StringBuilder();
     private static final int LOG_MAX_CHARS = 40000;
-    private Button powerButton, btnQuick, btnPool, btnWorkers, btnDpi, btnConsole;
+    private Button powerButton;
+    /** Нижняя линейка: квадратные кнопки, подпись по центру — ничего не переносится. */
+    private RailButton btnQuick, btnPool, btnWorkers, btnDpi, btnConsole;
+    /** Выбор целевого региона под линейкой. */
+    private LinearLayout regionRow;
     private LinearLayout consoleCard;
     private boolean consoleOpen = false;
     private View btnSettings;
@@ -221,33 +226,33 @@ public class MainActivity extends Activity {
         quickRow.setLayoutParams(quickRowLp);
 
         btnQuick = railButton("Поиск");
-        btnQuick.setOnClickListener(new View.OnClickListener() {
+        btnQuick.root.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 if (searching) { cancelSearch(); return; }
                 startQuickSearch();
             }
         });
-        quickRow.addView(btnQuick, railLp(0));
+        quickRow.addView(btnQuick.root, railLp(0));
 
         btnPool = railButton("Пул");
-        btnPool.setOnClickListener(new View.OnClickListener() {
+        btnPool.root.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 if (searching) { cancelSearch(); return; }
                 startBuildPool();
             }
         });
-        quickRow.addView(btnPool, railLp(1));
+        quickRow.addView(btnPool.root, railLp(1));
 
         btnWorkers = railButton("Рабочие");
-        btnWorkers.setOnClickListener(new View.OnClickListener() {
+        btnWorkers.root.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 startActivity(new Intent(MainActivity.this, PoolActivity.class));
             }
         });
-        quickRow.addView(btnWorkers, railLp(2));
+        quickRow.addView(btnWorkers.root, railLp(2));
 
         btnDpi = railButton("DPI");
-        btnDpi.setOnClickListener(new View.OnClickListener() {
+        btnDpi.root.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 if (BypassVpnService.isRunning() || BypassVpnService.isConnecting()) {
                     toast("Сначала отключите текущее подключение");
@@ -256,14 +261,27 @@ public class MainActivity extends Activity {
                 VpnStart.connectDpiOnly(MainActivity.this);
             }
         });
-        quickRow.addView(btnDpi, railLp(3));
+        quickRow.addView(btnDpi.root, railLp(3));
 
         btnConsole = railButton("Журнал");
-        btnConsole.setOnClickListener(new View.OnClickListener() {
+        btnConsole.root.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { toggleConsole(); }
         });
-        quickRow.addView(btnConsole, railLp(4));
+        quickRow.addView(btnConsole.root, railLp(4));
         root.addView(quickRow);
+
+        // ---- целевой регион: под кнопками, отдельной тихой строкой.
+        // Регион задаёт, по каким сайтам пингуется сеть и с какой ссылки меряется скорость:
+        // Европа и Америка — GitHub, Азия — региональный сайт Lenovo (см. Regions).
+        regionRow = new LinearLayout(this);
+        regionRow.setOrientation(LinearLayout.HORIZONTAL);
+        regionRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams regionLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        regionLp.topMargin = dp(10);
+        regionRow.setLayoutParams(regionLp);
+        root.addView(regionRow);
+        fillRegionRow();
 
         // ---- консоль: скрыта, пока её не открыли кнопкой
         consoleCard = Ui.card(this);
@@ -315,20 +333,90 @@ public class MainActivity extends Activity {
         refreshPoolCard();
     }
 
-    /** Кнопка вспомогательной линейки: мельче основной, без «карточки» вокруг. */
-    private Button railButton(String label) {
-        Button b = Ui.small(this, label);
-        b.setTextSize(12);
-        b.setTextColor(Ui.TEXT);
-        b.setMinHeight(0);
-        b.setMinimumHeight(0);
-        return b;
+    /**
+     * Квадратная кнопка нижней линейки.
+     *
+     * Раньше это была обычная кнопка с текстом: при пяти кнопках на узком экране подпись
+     * «Рабочие» не влезала и переносилась — последняя буква уезжала вниз и обрезалась.
+     * Теперь кнопка — квадрат 56 dp с подписью в одну строку по центру: переносить нечего,
+     * а ряд из пяти квадратов занимает ровно ту же ширину, что и раньше.
+     */
+    private RailButton railButton(String label) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER);
+        box.setClickable(true);
+        box.setFocusable(true);
+        Ui.ripple(box, Ui.SURFACE_2, 1, Ui.R_MD, 0x33FFFFFF, this);
+
+        TextView text = new TextView(this);
+        text.setText(label);
+        text.setTextSize(11);
+        text.setTextColor(Ui.TEXT);
+        text.setGravity(Gravity.CENTER);
+        text.setSingleLine(true);
+        text.setEllipsize(TextUtils.TruncateAt.END);
+        text.setPadding(dp(2), 0, dp(2), 0);
+        text.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        box.addView(text);
+        return new RailButton(box, text);
     }
 
     private LinearLayout.LayoutParams railLp(int index) {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(44), 1f);
-        if (index > 0) lp.leftMargin = dp(5);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(56), 1f);
+        if (index > 0) lp.leftMargin = dp(6);
         return lp;
+    }
+
+    /** Перерисовать строку регионов: выбранный — акцентом, остальные тихие. */
+    private void fillRegionRow() {
+        if (regionRow == null) return;
+        regionRow.removeAllViews();
+        final String current = Prefs.region(this);
+        TextView title = Ui.caption(this, "Регион:");
+        title.setPadding(0, 0, dp(8), 0);
+        regionRow.addView(title);
+        for (final String id : Regions.ids()) {
+            TextView chip = Ui.tab(this, Regions.label(id));
+            boolean on = id.equals(current);
+            Ui.paintChip(chip, on ? Ui.ACCENT : Ui.TEXT_DIM, on, this);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.rightMargin = dp(6);
+            chip.setLayoutParams(lp);
+            chip.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    if (id.equals(Prefs.region(MainActivity.this))) return;
+                    Prefs.setRegion(MainActivity.this, id);
+                    fillRegionRow();
+                    uiLog("Регион проверки: " + Regions.label(id)
+                            + " · пинг " + Regions.pingTarget(id)
+                            + " · скорость " + Regions.speedUrl(id));
+                }
+            });
+            regionRow.addView(chip);
+        }
+    }
+
+    /** Квадратная кнопка линейки: подпись и её цвет — единственное, что меняется извне. */
+    private static final class RailButton {
+        final LinearLayout root;
+        final TextView label;
+
+        RailButton(LinearLayout root, TextView label) {
+            this.root = root;
+            this.label = label;
+        }
+
+        void setText(String text) { label.setText(text); }
+
+        void setTextColor(int color) { label.setTextColor(color); }
+
+        void setEnabled(boolean on) {
+            root.setEnabled(on);
+            label.setEnabled(on);
+        }
     }
 
     /** Консоль открывается кнопкой «Журнал» и закрывается повторным нажатием. */

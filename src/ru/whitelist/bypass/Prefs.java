@@ -24,8 +24,10 @@ public final class Prefs {
     public static final String PING_TIMEOUT_MS = "ping_timeout_ms";
     /** Цели TCP-пинга «есть ли вообще интернет» (host:port, по одной на строку). */
     public static final String PING_TARGETS = "ping_targets";
-    /** URL, по которым проверяется живой канал через туннель (5 мест). */
+    /** URL, по которым проверяется живой канал через туннель (с 0.1.15 — из региона). */
     public static final String HEALTH_URLS = "health_urls";
+    /** Целевой регион: eu | asia | us (см. {@link Regions}). */
+    public static final String REGION = "target_region";
     /** Сколько экземпляров ядра мерить скорость одновременно. */
     public static final String SPEED_LANES = "speed_lanes";
     public static final String GATE_TIMEOUT_MS = "gate_timeout_ms";
@@ -173,8 +175,9 @@ public final class Prefs {
     };
 
     /**
-     * Пять мест для TCP-пинга: если ответило хотя бы одно — сеть жива.
-     * Проверяются параллельно, поэтому «медленный, но живой» канал виден сразу.
+     * Прежний набор целей пинга. С 0.1.15 по умолчанию берётся ОДНА цель из целевого
+     * региона (см. {@link Regions}); массив оставлен, чтобы узнать «старые дефолты» при
+     * миграции и чтобы наборы настроек оставались совместимыми.
      */
     public static final String[] DEFAULT_PING_TARGETS = {
             "www.instagram.com:443",
@@ -185,9 +188,8 @@ public final class Prefs {
     };
 
     /**
-     * Места для проверки КАНАЛА через туннель (HTTP через локальный SOCKS).
-     * Лёгкие generate_204: ответ в десятки байт, проверка занимает доли секунды, и
-     * каждый адрес живёт на своей инфраструктуре — одного ответа достаточно.
+     * Прежний набор адресов проверки канала. С 0.1.15 по умолчанию один адрес — сайт
+     * целевого региона; массив нужен для миграции и наборов настроек.
      */
     public static final String[] DEFAULT_HEALTH_URLS = {
             // Настоящий зарубежный источник, а не только «белые» 204: по нему видно,
@@ -202,12 +204,9 @@ public final class Prefs {
     public static final String DEFAULT_DNS = "1.1.1.1, 8.8.8.8, 9.9.9.9";
 
     /**
-     * Чем меряем скорость.
-     *
-     * Сначала лёгкие generate_204: они отвечают мгновенно и почти отовсюду, поэтому
-     * проверка «канал вообще живой» не ждёт мегабайтов. Затем настоящие файлы со списками
-     * конфигов с GitHub — на них и считается КБ/с, потому что именно за доступом к
-     * зарубежным источникам люди и включают обход.
+     * Прежний набор ссылок замера. С 0.1.15 по умолчанию ОДНА ссылка — из целевого
+     * региона (см. {@link Regions}); набор из четырёх маскировал проблему «сработал один
+     * из четырёх». Массив нужен для миграции и наборов настроек.
      */
     public static final String[] DEFAULT_SPEED_URLS = {
             // Первыми идут файлы, которые НЕЛЬЗЯ отдать «точечно разрешённым» каналом:
@@ -243,12 +242,11 @@ public final class Prefs {
         return kbit + " кбит/с (" + Math.max(1, Math.round(kbit / 8f)) + " КБ/с)";
     }
 
+    /** Ссылки замера скорости. С 0.1.15 по умолчанию ровно одна — из целевого региона. */
     public static List<String> speedUrls(Context c) {
-        String raw = get(c).getString(SPEED_URLS, join(DEFAULT_SPEED_URLS));
+        String raw = get(c).getString(SPEED_URLS, Regions.speedUrl(region(c)));
         List<String> out = lines(raw);
-        if (out.isEmpty()) {
-            for (String u : DEFAULT_SPEED_URLS) out.add(u);
-        }
+        if (out.isEmpty()) out.add(Regions.speedUrl(region(c)));
         return out;
     }
 
@@ -301,19 +299,15 @@ public final class Prefs {
 
     /** Цели TCP-пинга (host:port). Пусто/битые строки отбрасываются. */
     public static List<String> pingTargets(Context c) {
-        List<String> out = lines(get(c).getString(PING_TARGETS, join(DEFAULT_PING_TARGETS)));
-        if (out.isEmpty()) {
-            for (String t : DEFAULT_PING_TARGETS) out.add(t);
-        }
+        List<String> out = lines(get(c).getString(PING_TARGETS, Regions.pingTarget(region(c))));
+        if (out.isEmpty()) out.add(Regions.pingTarget(region(c)));
         return out;
     }
 
     /** URL проверки канала через туннель. */
     public static List<String> healthUrls(Context c) {
-        List<String> out = lines(get(c).getString(HEALTH_URLS, join(DEFAULT_HEALTH_URLS)));
-        if (out.isEmpty()) {
-            for (String u : DEFAULT_HEALTH_URLS) out.add(u);
-        }
+        List<String> out = lines(get(c).getString(HEALTH_URLS, Regions.healthUrl(region(c))));
+        if (out.isEmpty()) out.add(Regions.healthUrl(region(c)));
         return out;
     }
 
@@ -347,6 +341,28 @@ public final class Prefs {
     public static String kbitText(long kbit) {
         if (kbit <= 0) return "—";
         return kbit + " кбит/с (" + Math.max(1, Math.round(kbit / 8f)) + " КБ/с)";
+    }
+
+    // --- целевой регион ---
+
+    /** Целевой регион: {@link Regions#EU}, {@link Regions#ASIA} или {@link Regions#US}. */
+    public static String region(Context c) {
+        return Regions.normalize(get(c).getString(REGION, Regions.DEFAULT));
+    }
+
+    /**
+     * Сменить регион и ПОДСТАВИТЬ ЕГО САЙТЫ: одну цель пинга, одну ссылку замера и такую же
+     * проверку канала. Дальше их можно править руками в настройках — регион задаёт только
+     * значения по умолчанию.
+     */
+    public static void setRegion(Context c, String id) {
+        String v = Regions.normalize(id);
+        get(c).edit()
+                .putString(REGION, v)
+                .putString(PING_TARGETS, Regions.pingTarget(v))
+                .putString(SPEED_URLS, Regions.speedUrl(v))
+                .putString(HEALTH_URLS, Regions.healthUrl(v))
+                .apply();
     }
 
     // --- DPI на линии ---
@@ -597,6 +613,7 @@ public final class Prefs {
         }
         migrateToStandardPreset(c);
         migrateFasterDefaults(c);
+        migrateRegion(c);
     }
 
     /**
@@ -630,6 +647,43 @@ public final class Prefs {
         boolean untouched = Presets.looksUntouched(p);
         p.edit().putBoolean("migrated_presets_v1", true).apply();
         if (untouched) Presets.applyStandard(c);
+    }
+
+    /**
+     * 0.1.15: проверки стали «региональными» — одна цель пинга и одна ссылка замера.
+     *
+     * У кого в настройках остались СТАРЫЕ наборы по умолчанию (пять целей пинга, четыре
+     * ссылки замера), подставляем сайты региона: набор из пяти маскировал проблему —
+     * «работает» могло означать «сработал один из пяти». Свои адреса не трогаем.
+     */
+    private static void migrateRegion(Context c) {
+        SharedPreferences p = get(c);
+        if (p.getBoolean("migrated_region_v1", false)) return;
+        SharedPreferences.Editor e = p.edit();
+        String region = Regions.normalize(p.getString(REGION, Regions.DEFAULT));
+        List<String> ping = lines(p.getString(PING_TARGETS, ""));
+        if (ping.isEmpty() || sameLines(ping, DEFAULT_PING_TARGETS)) {
+            e.putString(PING_TARGETS, Regions.pingTarget(region));
+        }
+        List<String> speed = lines(p.getString(SPEED_URLS, ""));
+        if (speed.isEmpty() || sameLines(speed, DEFAULT_SPEED_URLS)) {
+            e.putString(SPEED_URLS, Regions.speedUrl(region));
+        }
+        List<String> health = lines(p.getString(HEALTH_URLS, ""));
+        if (health.isEmpty() || sameLines(health, DEFAULT_HEALTH_URLS)) {
+            e.putString(HEALTH_URLS, Regions.healthUrl(region));
+        }
+        e.putString(REGION, region);
+        e.putBoolean("migrated_region_v1", true);
+        e.apply();
+    }
+
+    private static boolean sameLines(List<String> a, String[] b) {
+        if (a.size() != b.length) return false;
+        for (int i = 0; i < b.length; i++) {
+            if (!b[i].equals(a.get(i))) return false;
+        }
+        return true;
     }
 
     // --- утилиты ---

@@ -433,7 +433,8 @@ public final class PoolPanel {
 
     private void updateBlacklistButton() {
         int n = failed.size();
-        blacklistAll.setText("В чёрный список все нерабочие (" + n + ")");
+        blacklistAll.setText("В чёрный список нерабочие (" + n + ") · "
+                + Net.label(net));
         blacklistAll.setEnabled(!busy && n > 0);
     }
 
@@ -633,7 +634,7 @@ public final class PoolPanel {
     }
 
     private void blacklistOne(Row r) {
-        Blacklist.add(act, r.cfg, "убран вручную с экрана рабочих конфигов");
+        Blacklist.add(act, net, r.cfg, "убран вручную с экрана рабочих конфигов");
         Pool.remove(act, net, r.entry.raw);
         clearFailed(r.entry);
         toast("В чёрном списке на 7 дней: " + truncate(r.cfg.name, 30));
@@ -675,7 +676,7 @@ public final class PoolPanel {
                         int n = 0;
                         for (Pool.Entry e : dead) {
                             ProxyConfig cfg = e.cfg();
-                            if (cfg != null) Blacklist.add(act, cfg, why);
+                            if (cfg != null) Blacklist.add(act, target, cfg, why);
                             Pool.remove(act, target, e.raw);
                             n++;
                         }
@@ -882,7 +883,7 @@ public final class PoolPanel {
                         int n = 0;
                         for (Pool.Entry e : entries) {
                             ProxyConfig cfg = e.cfg();
-                            if (cfg != null) Blacklist.add(act, cfg,
+                            if (cfg != null) Blacklist.add(act, net, cfg,
                                     "провалил проверку на экране рабочих конфигов");
                             Pool.remove(act, net, e.raw);
                             n++;
