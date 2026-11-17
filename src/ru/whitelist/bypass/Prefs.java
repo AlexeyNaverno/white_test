@@ -28,6 +28,20 @@ public final class Prefs {
     public static final String HEALTH_URLS = "health_urls";
     /** Целевой регион: eu | asia | us (см. {@link Regions}). */
     public static final String REGION = "target_region";
+    /** Российские сайты — напрямую, мимо туннеля (см. {@link SplitTunnel}). */
+    public static final String SPLIT_RU_DOMAINS = "split_ru_domains";
+    /** Российские приложения — вне tun (addDisallowedApplication). */
+    public static final String SPLIT_RU_APPS = "split_ru_apps";
+    /** Домены, добавленные к встроенному списку (по одному на строку). */
+    public static final String SPLIT_RU_DOMAINS_EXTRA = "split_ru_domains_extra";
+    /** Пакеты, добавленные к встроенному списку (по одному на строку). */
+    public static final String SPLIT_RU_APPS_EXTRA = "split_ru_apps_extra";
+    /** Сколько конфигов держать в хранилище (см. ConfigRepository). */
+    public static final String MAX_CONFIGS = "max_configs";
+    /** Потоки быстрого TCP-отсева (см. FastPing). */
+    public static final String FAST_PING_THREADS = "fast_ping_threads";
+    /** Таймаут быстрого TCP-отсева, мс. */
+    public static final String FAST_PING_TIMEOUT_MS = "fast_ping_timeout_ms";
     /** Сколько экземпляров ядра мерить скорость одновременно. */
     public static final String SPEED_LANES = "speed_lanes";
     public static final String GATE_TIMEOUT_MS = "gate_timeout_ms";
@@ -152,25 +166,47 @@ public final class Prefs {
      * (одна строка, год без обновлений), добавлены белые SNI от kort0881 и ежедневный
      * сборник aviamastersgh. DPI-источники и стратегии не трогались.
      */
+    /**
+     * Источники по умолчанию — 8 штук, а не 12.
+     *
+     * Почему меньше: крупные свалки (несколько тысяч строк) почти не добавляли рабочих
+     * конфигов, зато растягивали сбор пула — хранилище упиралось в потолок, и половина
+     * строк была мёртвой. Отсев мёртвого теперь быстрый (FastPing), но лишние строки всё
+     * равно стоят времени. Полный набор остался в {@link #FULL_SOURCES}: его можно вернуть
+     * одной кнопкой в настройках.
+     */
     public static final String[] DEFAULT_SOURCES = {
             // 1–2. Авторы уже проверили пинг и скорость — самые «плотные» списки.
             "https://raw.githubusercontent.com/luxxuria/harvester/main/speed_tested.txt",
             "https://raw.githubusercontent.com/luxxuria/harvester/main/ping_tested.txt",
-            // 3–4. Под РФ: локальный SNI и белые SNI (обновляются ежедневно).
+            // 3–5. Под РФ: локальный SNI и чёрный список мобильных конфигов.
+            "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni-local/vless.txt",
+            "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS_mobile.txt",
+            "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
+            // 6. «Антиглушилки»: большой список, авторы сами его проверяют.
+            "https://raw.githubusercontent.com/wlunlocker/vpn-configs/main/whitelist_all.txt",
+            // 7. Белые SNI под РФ (обновляются ежедневно).
+            "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/vless.txt",
+            // 8. Чёрный список РФ (немобильный) — добирает то, чего нет в мобильном.
+            "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS.txt"
+    };
+
+    /**
+     * Полный набор источников (12) — для тех, кому нужно максимум вариантов: крупные
+     * свалки, CIDR-списки и JSON автопроверки. Возвращается кнопкой в настройках.
+     */
+    public static final String[] FULL_SOURCES = {
+            "https://raw.githubusercontent.com/luxxuria/harvester/main/speed_tested.txt",
+            "https://raw.githubusercontent.com/luxxuria/harvester/main/ping_tested.txt",
             "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni-local/vless.txt",
             "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/vless.txt",
-            // 5–8. Массовые сборники под РФ: чёрные списки, белые SNI/CIDR.
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS_mobile.txt",
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-all.txt",
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS.txt",
-            // 9. «Антиглушилки»: большой список, авторы сами его проверяют.
             "https://raw.githubusercontent.com/wlunlocker/vpn-configs/main/whitelist_all.txt",
-            // 10. JSON с результатами автопроверки ключей: ссылки вытаскиваются как есть.
             "https://raw.githubusercontent.com/tiagorrg/vless-checker/main/docs/keys.json",
-            // 11. Крупный ежедневный сборник (несколько тысяч строк) — предпоследним.
             "https://raw.githubusercontent.com/aviamastersgh/vpn-free-russia/main/all_configs.txt",
-            // 12. Общий большой сборник — последним: до него дело обычно не доходит.
             "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/clean/vless.txt"
     };
 
@@ -264,6 +300,73 @@ public final class Prefs {
         String joined = get(c).getString(SOURCES, null);
         if (joined == null) joined = join(DEFAULT_SOURCES);
         return lines(joined);
+    }
+
+    // --- раздельное туннелирование (Россия — мимо VPN) ---
+
+    /**
+     * Не пускать российские САЙТЫ через VPN. По умолчанию включено: банк, госуслуги и
+     * маркетплейсы должны открываться с домашнего IP, иначе часть из них просто
+     * отказывает, а скорость через туннель им не нужна.
+     */
+    public static boolean splitRuDomains(Context c) {
+        return get(c).getBoolean(SPLIT_RU_DOMAINS, true);
+    }
+
+    /** Не пускать российские ПРИЛОЖЕНИЯ в tun — они ходят как без VPN. */
+    public static boolean splitRuApps(Context c) {
+        return get(c).getBoolean(SPLIT_RU_APPS, true);
+    }
+
+    public static List<String> splitExtraDomains(Context c) {
+        return lines(get(c).getString(SPLIT_RU_DOMAINS_EXTRA, ""));
+    }
+
+    public static List<String> splitExtraPackages(Context c) {
+        return lines(get(c).getString(SPLIT_RU_APPS_EXTRA, ""));
+    }
+
+    // --- размер хранилища конфигов ---
+
+    /** Потолок строк в хранилище по умолчанию: 1200 хватает с запасом. */
+    public static final int DEFAULT_MAX_CONFIGS = 1200;
+    public static final int MAX_CONFIGS_CAP = 3000;
+
+    /**
+     * Сколько конфигов держать скачанными. Меньше строк — быстрее круг проверок:
+     * большинство строк в публичных списках всё равно мёртвые, и их отсеивает
+     * быстрый TCP-отсев, но хранилище на 2000+ строк ощутимо замедляет старт сбора.
+     */
+    public static int maxConfigs(Context c) {
+        return clamp(get(c).getInt(MAX_CONFIGS, DEFAULT_MAX_CONFIGS), 200, MAX_CONFIGS_CAP);
+    }
+
+    // --- быстрый отсев ---
+
+    /** Потолок одновременных TCP-отсевов: сокеты дешёвые, но 256 — уже предел. */
+    public static final int MAX_FAST_THREADS = 512;
+
+    /**
+     * Сколько TCP-подключений делать одновременно в быстром отсеве.
+     * По умолчанию 48 на ядро (384 на восьми ядрах): отсев — это только connect, без TLS
+     * и данных, поэтому потоки почти не грузят процессор, а ждут ответа сети.
+     */
+    public static int fastPingThreads(Context c) {
+        return clamp(get(c).getInt(FAST_PING_THREADS, defaultFastThreads()), 16, MAX_FAST_THREADS);
+    }
+
+    public static int defaultFastThreads() {
+        int cores = Math.max(1, Runtime.getRuntime().availableProcessors());
+        // 40 на ядро и не больше 384: сокеты дешёвые, но 512 одновременных connect
+        // на слабом телефоне — это уже риск упереться в лимит дескрипторов.
+        return clamp(cores * 40, 64, 384);
+    }
+
+    /** Таймаут одного TCP-отсева, мс. 900 по умолчанию: мёртвый сервер не ответит и за 5 с. */
+    public static final int DEFAULT_FAST_TIMEOUT_MS = 900;
+
+    public static int fastPingTimeoutMs(Context c) {
+        return clamp(get(c).getInt(FAST_PING_TIMEOUT_MS, DEFAULT_FAST_TIMEOUT_MS), 200, 5000);
     }
 
     // --- проверки ---

@@ -3,6 +3,13 @@
     <!-- package/versionCode/versionName задаются в gradle.properties: так их видят и
          Gradle, и CI, и F-Droid-рецепт (metadata/ru.whitelist.bypass.yml). -->
 
+    <!--
+        Видимость пакетов нужна раздельному туннелированию: без неё на Android 11+
+        getPackageInfo и addDisallowedApplication не видят установленные приложения,
+        и «не пускать банк через VPN» молча не работает. Список приложений не покидает
+        телефон: он используется только для VpnService.Builder.
+    -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

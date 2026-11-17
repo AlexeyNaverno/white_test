@@ -1,0 +1,5 @@
+• Split tunneling: Russian sites and apps no longer go through the VPN. Sites — by a built-in domain list (.ru/.рф plus Yandex, VK, banks, government, marketplaces, carriers, maps, taxis); apps — excluded from the tun via addDisallowedApplication. Both are toggled in "Bypass → Russian traffic — outside VPN", with fields for your own domains and packages.
+• Three-stage fast checking: a quick TCP pre-filter per server (900 ms, 384 threads, configs grouped by host:port — 1200 lines checked in seconds), then the full TLS ping, then the speed test. Filtered-out configs are not blacklisted.
+• Smaller defaults: 8 sources instead of 12 (full set restorable by a button) and a 1200-config storage cap instead of 2000 — configurable.
+• "Connected but no measured speed" now goes to the blacklist on every path: one-button connect, list import and clipboard paste.
+• Added QUERY_ALL_PACKAGES so installed apps can be excluded from the VPN on Android 11+.

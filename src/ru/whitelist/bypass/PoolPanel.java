@@ -919,7 +919,7 @@ public final class PoolPanel {
 
     private static String okText(Measured m) {
         boolean onlyAlive = m.result.speed != null && !m.result.speed.ok() && m.result.speed.alive();
-        return onlyAlive ? "связность есть, скорость не измерена"
+        return onlyAlive ? "связность есть, скорость не измерена — в чёрный список"
                 : Prefs.speedText(m.result.kbps);
     }
 
