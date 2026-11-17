@@ -631,6 +631,15 @@ public class BypassVpnService extends VpnService {
                 Prefs.pingTimeoutMs(this));
         sendStatus("connecting", "Сеть: " + net.text());
 
+        // Быстрый отсев: TCP-connect по серверам — до полного пинга с TLS.
+        all = Blacklist.filter(this, all);
+        sendStatus("connecting", "Быстрый отсев: " + all.size() + " конфигов…");
+        FastPing.Outcome fast = FastPing.filter(this, all, null);
+        if (fast.cancelled) return new ArrayList<>();
+        all = fast.alive;
+        sendStatus("connecting", "Быстрый отсев: " + fast.summary());
+        if (all.isEmpty()) return new ArrayList<>();
+
         sendStatus("connecting", "Пингую " + all.size() + " конфигов…");
         ConfigTester.Outcome ping = ConfigTester.test(all, Prefs.pingThreads(this),
                 Prefs.pingTimeoutMs(this), null);
@@ -651,9 +660,14 @@ public class BypassVpnService extends VpnService {
             sendStatus("connecting", "  → " + r.text());
             if (r.ok && r.kbps > 0) {
                 Pool.remember(this, cfg.raw, r.kbps, cfg.latency);
+                Blacklist.forget(this, cfg.raw);
                 found.add(cfg);
                 if (found.size() >= 2) break;
             }
+            // «Связность есть, скорость не измерена» и прочие жёсткие отказы —
+            // в чёрный список: конфиг, который отвечает 204 и не отдаёт данные,
+            // рабочим не считается.
+            if (r.hard) Blacklist.add(this, cfg, r.reason);
         }
         return found;
     }
@@ -686,8 +700,13 @@ public class BypassVpnService extends VpnService {
                 lastError = bad;
                 return false;
             }
+            // Российские домены — мимо туннеля (раздельное туннелирование). Список
+            // передаём только при реальном подключении: замеру он не нужен, а правила
+            // маршрутизации в пробном конфиге только путали бы картину.
+            java.util.List<String> direct = Prefs.splitRuDomains(this)
+                    ? SplitTunnel.domains(this) : null;
             String json = XrayEngine.buildConfigJson(cfg, XRAY_PORT, false,
-                    Prefs.vpnDns(this), desyncPort);
+                    Prefs.vpnDns(this), desyncPort, direct);
             XrayEngine.start(this, json, new XrayEngine.Callback() {
                 @Override public void onReady() { }
                 @Override public void onError(String message) { Log.w(TAG, "xray: " + message); }
@@ -844,6 +863,24 @@ public class BypassVpnService extends VpnService {
             builder.addDisallowedApplication(getPackageName());
         } catch (Exception e) {
             Log.w(TAG, "не удалось исключить себя из TUN", e);
+        }
+        // Раздельное туннелирование: приложения из списка ходят как без VPN — их трафик
+        // в tun не попадает вообще. Это надёжнее доменных правил: банк или госуслуги
+        // лезут и на CDN, и по IP, а такой трафик доменом не поймать.
+        // Работает во всех режимах, включая Tor: исключённое приложение просто не видит
+        // туннель и открывается с обычного канала — ровно то, что нужно банку и госуслугам.
+        if (Prefs.splitRuApps(this)) {
+            java.util.List<String> excluded = SplitTunnel.installedPackages(this);
+            int ok = 0;
+            for (String pkg : excluded) {
+                try {
+                    builder.addDisallowedApplication(pkg);
+                    ok++;
+                } catch (Throwable t) {
+                    Log.w(TAG, "пакет не исключён из TUN: " + pkg, t);
+                }
+            }
+            if (ok > 0) Log.i(TAG, "раздельное туннелирование: " + ok + " приложений вне VPN");
         }
         return builder.establish();
     }

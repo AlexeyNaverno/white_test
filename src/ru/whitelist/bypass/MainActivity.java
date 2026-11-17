@@ -883,6 +883,31 @@ public class MainActivity extends Activity {
                             Prefs.pingTimeoutMs(MainActivity.this));
                     uiLog("Сеть: " + net.text());
 
+                    // 1.8) БЫСТРЫЙ ОТСЕВ. Первая ступень из трёх: TCP-connect по серверам
+                    // (по одному на пару host:port), потом полный пинг с TLS, потом замер
+                    // скорости. Без этой ступени полный пинг жёг минуты на серверах,
+                    // которых давно нет, — а их в публичных списках большинство.
+                    if (!ConfigRepository.isCancelled()) {
+                        uiLog("Быстрый отсев: TCP-connect по серверам · потоков "
+                                + Prefs.fastPingThreads(MainActivity.this)
+                                + ", таймаут " + Prefs.fastPingTimeoutMs(MainActivity.this) + " мс");
+                        final FastPing.Outcome fast = FastPing.filter(MainActivity.this, all,
+                                new FastPing.Log() {
+                                    @Override public void line(String message) { uiLog(message); }
+                                });
+                        if (fast.cancelled) {
+                            uiLog("Сбор остановлен");
+                            return;
+                        }
+                        all = fast.alive;
+                        uiLog("Быстрый отсев: " + fast.summary());
+                        if (all.isEmpty()) {
+                            uiLog("Ни один сервер не открылся — сеть сейчас не пускает "
+                                    + "ни к одному. Проверьте интернет и повторите.");
+                            return;
+                        }
+                    }
+
                     // 2) Порядок обхода списков случайный, а не «первые две тысячи строк»:
                     // источники отдают файлы подряд, и при последовательном обходе все
                     // дорожки занимал один список, пока до остальных не доходило дело.
@@ -1073,7 +1098,8 @@ public class MainActivity extends Activity {
                                 if (key != null) pool.put(key, e);
                             }
                         } else {
-                            bump(why, r.reason);
+                            boolean hard = r.hard;
+                            bump(why, hard ? r.reason + " → в чёрный список" : r.reason);
                             // Ядро не поднялось / данных нет — в чёрный список: в следующий
                             // раз его даже не пингуем. «Мягкие» отказы — кандидаты на DPI.
                             if (r.hard) {

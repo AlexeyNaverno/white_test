@@ -55,7 +55,14 @@ public final class SettingsIo {
             Prefs.TOR_BRIDGES,
             Prefs.TOR_BRIDGE_WAIT_SEC,
             Prefs.TOR_EXTRA_TORRC,
-            Prefs.TOR_FALLBACK));
+            Prefs.TOR_FALLBACK,
+            Prefs.SPLIT_RU_DOMAINS,
+            Prefs.SPLIT_RU_APPS,
+            Prefs.SPLIT_RU_DOMAINS_EXTRA,
+            Prefs.SPLIT_RU_APPS_EXTRA,
+            Prefs.MAX_CONFIGS,
+            Prefs.FAST_PING_THREADS,
+            Prefs.FAST_PING_TIMEOUT_MS));
 
     private SettingsIo() {
     }

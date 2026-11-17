@@ -128,6 +128,27 @@ public final class QuickSearch {
         if (!rejects.isEmpty()) {
             log.line(Probe.rejectsText(rejects) + " — пропускаю");
         }
+
+        // Быстрый отсев: TCP-connect по каждому серверу, без TLS и без ядра. Мёртвые
+        // серверы (а их в публичных списках большинство) отваливаются за секунды, и
+        // полный пинг с handshake достаётся только живым.
+        if (!queue.isEmpty()) {
+            log.line("Быстрый отсев: " + Prefs.fastPingThreads(c) + " потоков по серверам, "
+                    + "таймаут " + Prefs.fastPingTimeoutMs(c) + " мс");
+            FastPing.Outcome fast = FastPing.filter(c, queue, new FastPing.Log() {
+                @Override public void line(String message) { log.line(message); }
+            });
+            if (fast.cancelled) {
+                log.line("Поиск остановлен");
+                return null;
+            }
+            log.line("Быстрый отсев: " + fast.summary());
+            queue = fast.alive;
+            if (queue.isEmpty()) {
+                log.line("Ни один сервер не открылся — похоже, сеть не пускает никуда");
+                return null;
+            }
+        }
         log.line("Сначала перебираю локальный список: " + queue.size()
                 + " конфигов (источники — только когда он кончится)");
 

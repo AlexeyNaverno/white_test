@@ -52,9 +52,6 @@ public final class ConfigRepository {
     private static final int TOR_CONNECT_TIMEOUT_MS = 20000;
     private static final int TOR_READ_TIMEOUT_MS = 25000;
     private static final int TOR_SOURCE_BUDGET_MS = 40000;
-    /** Потолок хранилища: больше 2 000 строк телефону не нужно. */
-    private static final int MAX_LINES = 2000;
-
     /** Встроенный резерв — только чтобы «Подключить» работало сразу после установки. */
     private static final String[] EMBEDDED = {
             "fallback/vless_black_mobile.txt",
@@ -287,6 +284,7 @@ public final class ConfigRepository {
      */
     public static UpdateResult updateAll(Context c, Progress progress) {
         UpdateResult res = new UpdateResult();
+        final int max = Prefs.maxConfigs(c);
         List<String> sources = Prefs.sources(c);
         if (sources.isEmpty()) {
             res.messages.add("Список источников пуст (Настройки → Источники)");
@@ -306,7 +304,7 @@ public final class ConfigRepository {
                 List<String> lines = fetch(src, null, bytes);
                 res.sourcesOk++;
                 res.bytes += bytes[0];
-                int added = collect(unique, lines, res);
+                int added = collect(unique, lines, res, max);
                 if (progress != null) {
                     progress.onMessage(shortSource(src) + ": +" + added
                             + " (всего " + unique.size() + "), " + (bytes[0] / 1024) + " КБ за "
@@ -324,7 +322,7 @@ public final class ConfigRepository {
                 res.messages.add("Не ответил " + shortSource(src) + ": " + e.getMessage());
                 retryViaTor.add(src);
             }
-            if (unique.size() >= MAX_LINES) break;
+            if (unique.size() >= max) break;
         }
         res.elapsedMs = System.currentTimeMillis() - started;
 
@@ -343,11 +341,11 @@ public final class ConfigRepository {
                             List<String> lines = fetch(src, torProxy(), bytes);
                             res.sourcesOk++;
                             res.bytes += bytes[0];
-                            collect(unique, lines, res);
+                            collect(unique, lines, res, max);
                         } catch (Exception e) {
                             res.messages.add("Через Tor не ответил: " + shortSource(src));
                         }
-                        if (unique.size() >= MAX_LINES) break;
+                        if (unique.size() >= max) break;
                     }
                 } finally {
                     TorEngine.stop(c);
@@ -370,26 +368,27 @@ public final class ConfigRepository {
             "(?:vless|vmess|trojan|ss|ssr|hysteria2|hy2|tuic)://[^\\s\"'<>\\,)]+",
             java.util.regex.Pattern.CASE_INSENSITIVE);
 
-    private static int collect(Map<String, String> unique, List<String> lines, UpdateResult res) {
+    private static int collect(Map<String, String> unique, List<String> lines, UpdateResult res,
+                               int max) {
         int added = 0;
         for (String line : lines) {
             String t = line.trim();
             if (t.isEmpty() || t.startsWith("#") || t.startsWith("//")) continue;
-            added += addOne(unique, t, res);
-            if (unique.size() >= MAX_LINES) break;
+            added += addOne(unique, t, res, max);
+            if (unique.size() >= max) break;
             // строка может быть не конфигом, а JSON/разметкой: вытаскиваем ссылки из неё
             java.util.regex.Matcher m = TOKEN.matcher(t);
             while (m.find()) {
-                added += addOne(unique, m.group(), res);
-                if (unique.size() >= MAX_LINES) break;
+                added += addOne(unique, m.group(), res, max);
+                if (unique.size() >= max) break;
             }
-            if (unique.size() >= MAX_LINES) break;
+            if (unique.size() >= max) break;
         }
         return added;
     }
 
-    private static int addOne(Map<String, String> unique, String raw, UpdateResult res) {
-        if (unique.size() >= MAX_LINES) return 0;
+    private static int addOne(Map<String, String> unique, String raw, UpdateResult res, int max) {
+        if (unique.size() >= max) return 0;
         ProxyConfig p = ProxyConfig.parse(raw, "источник", false);
         if (p == null || p.host == null || p.host.isEmpty() || p.port <= 0) return 0;
         if (!p.supported) { res.skipped++; return 0; }
@@ -572,7 +571,7 @@ public final class ConfigRepository {
         }
         int before = unique.size();
         UpdateResult counter = new UpdateResult();
-        collect(unique, lines, counter);
+        collect(unique, lines, counter, Prefs.maxConfigs(c));
         int added = unique.size() - before;
         if (added > 0) {
             writeAll(c, new ArrayList<>(unique.values()));

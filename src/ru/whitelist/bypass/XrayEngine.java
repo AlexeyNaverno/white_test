@@ -313,13 +313,22 @@ public final class XrayEngine {
         return buildConfigJson(cfg, localSocksPort, allowInsecure, dns, 0);
     }
 
+    public static String buildConfigJson(ProxyConfig cfg, int localSocksPort, boolean allowInsecure,
+                                         String dns, int desyncSocksPort) {
+        return buildConfigJson(cfg, localSocksPort, allowInsecure, dns, desyncSocksPort, null);
+    }
+
     /**
      * @param desyncSocksPort &gt; 0 — линия до VPN-сервера идёт через локальный ByeDPI:
      *                        основному outbound ставится streamSettings.proxySettings
      *                        и добавляется socks-outbound «desync».
+     * @param directDomains   домены, которые идут МИМО туннеля (прямой outbound
+     *                        «direct»): раздельное туннелирование российских сайтов.
+     *                        null/пусто — весь трафик в туннель, как раньше.
      */
     public static String buildConfigJson(ProxyConfig cfg, int localSocksPort, boolean allowInsecure,
-                                         String dns, int desyncSocksPort) {
+                                         String dns, int desyncSocksPort,
+                                         java.util.List<String> directDomains) {
         try {
             // Конфиг без TLS к публичному адресу ядро не примет: подставляем локальный
             // ретранслятор — outbound идёт на 127.0.0.1, а dokodemo-door отдаёт
@@ -396,12 +405,36 @@ public final class XrayEngine {
                 }
             }
 
+            // --- правила маршрутизации
+            //
+            // 1) relay-in (конфиги без TLS) идёт в desync/direct — служебная линия.
+            // 2) Российские домены идут в «direct», то есть открываются с телефона
+            //    напрямую: приложение исключено из tun, поэтому freedom-соединение
+            //    выходит в сеть как обычный трафик без VPN. Домен берётся из sniffing
+            //    (TLS/HTTP), поэтому правило работает и для браузера, и для приложений.
+            //    Порядок важен: правила проверяются сверху вниз, и «мимо VPN» должно
+            //    стоять ПЕРВЫМ, иначе relay-правило или outbound по умолчанию заберут
+            //    соединение в туннель.
+            JSONArray rules = new JSONArray();
+            if (directDomains != null && !directDomains.isEmpty()) {
+                JSONArray domains = new JSONArray();
+                for (String d : directDomains) {
+                    if (d != null && !d.trim().isEmpty()) domains.put(d.trim());
+                }
+                if (domains.length() > 0) {
+                    rules.put(new JSONObject()
+                            .put("type", "field")
+                            .put("domain", domains)
+                            .put("outboundTag", "direct"));
+                }
+            }
             if (relayPort > 0) {
-                JSONArray rules = new JSONArray();
                 rules.put(new JSONObject()
                         .put("type", "field")
                         .put("inboundTag", new JSONArray().put("relay-in"))
                         .put("outboundTag", desyncReady ? "desync" : "direct"));
+            }
+            if (rules.length() > 0) {
                 root.put("routing", new JSONObject()
                         .put("domainStrategy", "AsIs")
                         .put("rules", rules));

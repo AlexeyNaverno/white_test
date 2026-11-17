@@ -66,14 +66,15 @@ public class SettingsActivity extends Activity {
     private EditText editSources, editSpeedUrls, editMinSpeed, editThreads, editTimeout,
             editGateTimeout, editStrategyWifi, editStrategyLte, editVpnDns, editMonitor,
             editSwitchTimeout, editTorBridges, editTorExtra, editTorBridgeWait, editPingTargets,
-            editHealthUrls, editLanes, editDpiSources, editDpiOnlyStrategy, editDpiOnlyUrls;
+            editHealthUrls, editLanes, editDpiSources, editDpiOnlyStrategy, editDpiOnlyUrls,
+            editFastThreads, editFastTimeout, editMaxConfigs, editSplitDomains, editSplitApps;
     /** Строка с тремя регионами на странице «Списки». */
     private LinearLayout regionRow;
     private TextView regionNow, regionNote;
     /** Панель рабочих конфигов на первой вкладке (та же, что на отдельном экране). */
     private PoolPanel poolPanel;
     private Switch swDesync, swIpv6, swAutoSwitch, swBoot, swEmbedded, swDpiAutotune,
-            swTorFallback, swNoTls;
+            swTorFallback, swNoTls, swSplitDomains, swSplitApps;
 
     private int dp(int v) {
         return (int) (v * getResources().getDisplayMetrics().density);
@@ -261,6 +262,26 @@ public class SettingsActivity extends Activity {
         label("Таймаут пинга, мс (2000 по умолчанию)", Help.PING_TIMEOUT_MS);
         add(editTimeout);
 
+        // --- быстрый отсев: первая ступень проверки, TCP без TLS
+        editFastThreads = numberField(String.valueOf(Prefs.fastPingThreads(this)));
+        label("Потоков быстрого отсева (TCP-connect, до " + Prefs.MAX_FAST_THREADS
+                + ", по умолчанию " + Prefs.defaultFastThreads() + " на этом телефоне)",
+                Help.FAST_PING_THREADS);
+        add(editFastThreads);
+        editFastTimeout = numberField(String.valueOf(Prefs.fastPingTimeoutMs(this)));
+        label("Таймаут быстрого отсева, мс (900 по умолчанию)", Help.FAST_PING_TIMEOUT);
+        add(editFastTimeout);
+        note("Как устроена проверка теперь — три ступени, от дешёвой к дорогой.\n"
+                + "1) Быстрый отсев: простое TCP-подключение к серверу (900 мс, 384 потока). "
+                + "Конфиги группируются по паре host:port, поэтому на 1200 строк обычно "
+                + "150–300 серверов, и каждый проверяется один раз. Мёртвое отваливается за "
+                + "секунды, в чёрный список при этом никто не попадает.\n"
+                + "2) Полный пинг: TLS-handshake и обычный TCP для живых серверов — тот же, "
+                + "что и раньше.\n"
+                + "3) Замер скорости через поднятое ядро — только для прошедших обе ступени.\n"
+                + "Так «1000 конфигов» перестают означать «минуты ожидания»: до ядра доходят "
+                + "единицы.");
+
         editPingTargets = multiField(Prefs.join(Prefs.pingTargets(this)), 3);
         label("Цель TCP-пинга «есть ли интернет» (host:port; одна строка — норма)", Help.PING_TARGETS);
         add(editPingTargets);
@@ -281,6 +302,11 @@ public class SettingsActivity extends Activity {
         editSources = multiField(Prefs.join(Prefs.sources(this)), 7);
         label("По одной ссылке на строку; порядок = приоритет", Help.SOURCES);
         add(editSources);
+
+        editMaxConfigs = numberField(String.valueOf(Prefs.maxConfigs(this)));
+        label("Сколько конфигов держать в хранилище (200–" + Prefs.MAX_CONFIGS_CAP
+                + ", по умолчанию " + Prefs.DEFAULT_MAX_CONFIGS + ")", Help.MAX_CONFIGS);
+        add(editMaxConfigs);
         Button resetSources = smallButton("Вернуть источники по умолчанию");
         resetSources.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
@@ -289,6 +315,15 @@ public class SettingsActivity extends Activity {
             }
         });
         addAction(resetSources, "Источники по умолчанию", Help.RESET_SOURCES);
+
+        Button fullSources = smallButton("Полный набор источников (12) — максимум вариантов");
+        fullSources.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                editSources.setText(Prefs.join(Prefs.FULL_SOURCES));
+                toast("Полный набор подставлен — применится после «Сохранить»");
+            }
+        });
+        addAction(fullSources, "Полный набор источников", Help.SOURCES);
 
         newPage("Обход");
 
@@ -456,6 +491,69 @@ public class SettingsActivity extends Activity {
         label("Секунд без ответа до переключения", Help.SWITCH_TIMEOUT);
         add(editSwitchTimeout);
         swBoot = switchRow("Подключаться при загрузке", Prefs.bootConnect(this), Help.BOOT_CONNECT);
+
+        // --- раздельное туннелирование: российское — мимо VPN
+        section("Российское — мимо VPN");
+
+        swSplitDomains = switchRow("Не пускать российские сайты через VPN (мимо туннеля)",
+                Prefs.splitRuDomains(this), Help.SPLIT_DOMAINS);
+        note("Зачем: банк, госуслуги, маркетплейсы, карты и такси не должны ходить через "
+                + "чужой сервер. Часть из них отказывает в работе с иностранного IP, часть "
+                + "просто не нуждается в обходе, а платить скоростью за собственный банк "
+                + "глупо.\n\n"
+                + "Как: ядро Xray получает правила маршрутизации, и домены из списка уходят "
+                + "в прямой выход (freedom) — соединение открывается с телефона как обычный "
+                + "трафик без VPN. Домен ядро берёт из TLS/HTTP (sniffing), поэтому правило "
+                + "работает и в браузере, и в приложениях, которые ходят по именам.\n\n"
+                + "Встроенный список: зоны .ru и .рф целиком плюс крупные сервисы на других "
+                + "зонах (vk.com, yandex.com, ozon.com, 2gis.com и т.п.) — всего "
+                + SplitTunnel.builtinDomains().length + " записей. Ниже можно добавить свои.");
+
+        editSplitDomains = multiField(Prefs.join(Prefs.splitExtraDomains(this)), 3);
+        label("Добавить свои домены (по одному на строку; поддомены включаются сами)",
+                Help.SPLIT_DOMAINS);
+        add(editSplitDomains);
+
+        swSplitApps = switchRow("Не пускать российские приложения в туннель",
+                Prefs.splitRuApps(this), Help.SPLIT_APPS);
+        note("Это другой механизм, и он надёжнее доменных правил: приложение вообще "
+                + "исключается из tun (addDisallowedApplication), то есть ходит как без VPN, "
+                + "чем бы оно ни пользовалось — CDN, IP-адресами, своими протоколами.\n\n"
+                + "Применяются только установленные приложения: сейчас на телефоне "
+                + SplitTunnel.summary(this) + ". Список — банки, госуслуги, Яндекс, VK, "
+                + "маркетплейсы, операторы, такси и карты, доставка.");
+
+        editSplitApps = multiField(Prefs.join(Prefs.splitExtraPackages(this)), 3);
+        label("Добавить свои пакеты (например, com.example.app — по одному на строку)",
+                Help.SPLIT_APPS);
+        add(editSplitApps);
+
+        LinearLayout splitFound = new LinearLayout(this);
+        splitFound.setOrientation(LinearLayout.VERTICAL);
+        final TextView splitOut = new TextView(this);
+        splitOut.setTextColor(TEXT_DIM);
+        splitOut.setTextSize(12);
+        splitOut.setText(SplitTunnel.installedPackages(this).isEmpty()
+                ? "Из списка на этом телефоне не установлено ни одного приложения."
+                : "Исключаются из VPN: " + joinPackages(SplitTunnel.installedPackages(this)));
+        splitFound.addView(splitOut);
+        add(splitFound);
+        Button checkSplit = smallButton("Проверить, какие приложения найдены");
+        checkSplit.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                savePrefs();
+                java.util.List<String> found = SplitTunnel.installedPackages(SettingsActivity.this);
+                splitOut.setText(found.isEmpty()
+                        ? "Ни одного приложения из списка не установлено."
+                        : "Исключаются из VPN (" + found.size() + "): "
+                                + joinPackages(found));
+                toast("Найдено приложений: " + found.size());
+            }
+        });
+        addAction(checkSplit, "Найденные приложения", Help.SPLIT_APPS);
+        note("Работает во всех режимах, включая Tor: исключённое приложение просто не видит "
+                + "туннель. В режиме «только DPI» разделения нет — там нет VPN-сервера и "
+                + "весь трафик идёт напрямую.");
 
         newPage("Tor");
 
@@ -1192,6 +1290,18 @@ public class SettingsActivity extends Activity {
         e.putInt(Prefs.TOR_BRIDGE_WAIT_SEC,
                 Prefs.clamp(parseInt(editTorBridgeWait, 10), 5, 120));
         e.putBoolean(Prefs.TOR_FALLBACK, swTorFallback.isChecked());
+        e.putBoolean(Prefs.SPLIT_RU_DOMAINS, swSplitDomains.isChecked());
+        e.putBoolean(Prefs.SPLIT_RU_APPS, swSplitApps.isChecked());
+        e.putString(Prefs.SPLIT_RU_DOMAINS_EXTRA, normalizeLines(editSplitDomains.getText().toString()));
+        e.putString(Prefs.SPLIT_RU_APPS_EXTRA, normalizeLines(editSplitApps.getText().toString()));
+        e.putInt(Prefs.FAST_PING_THREADS,
+                Prefs.clamp(parseInt(editFastThreads, Prefs.defaultFastThreads()), 16,
+                        Prefs.MAX_FAST_THREADS));
+        e.putInt(Prefs.FAST_PING_TIMEOUT_MS,
+                Prefs.clamp(parseInt(editFastTimeout, Prefs.DEFAULT_FAST_TIMEOUT_MS), 200, 5000));
+        e.putInt(Prefs.MAX_CONFIGS,
+                Prefs.clamp(parseInt(editMaxConfigs, Prefs.DEFAULT_MAX_CONFIGS), 200,
+                        Prefs.MAX_CONFIGS_CAP));
         e.apply();
     }
 
@@ -1435,6 +1545,21 @@ public class SettingsActivity extends Activity {
         row.addView(sw);
         add(row);
         return sw;
+    }
+
+    /** «Sberbank, VK, Ozon» — короткая строка для подписи. */
+    private String joinPackages(java.util.List<String> packages) {
+        StringBuilder sb = new StringBuilder();
+        int shown = 0;
+        for (String pkg : packages) {
+            if (shown++ >= 6) {
+                sb.append(" и ещё ").append(packages.size() - 6);
+                break;
+            }
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(SplitTunnel.appLabel(this, pkg));
+        }
+        return sb.toString();
     }
 
     private Button smallButton(String text) {

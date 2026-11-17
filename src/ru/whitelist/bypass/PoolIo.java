@@ -106,8 +106,26 @@ public final class PoolIo {
             return res;
         }
 
-        // --- 1) пинг: отсекает мёртвое до запуска ядра
+        // --- 0) быстрый TCP-отсев: по одному connect на сервер, без TLS и ядра
         List<ProxyConfig> candidates = new ArrayList<>(unique.values());
+        say(log, "Быстрый отсев: TCP-connect по серверам (" + Prefs.fastPingThreads(c)
+                + " потоков, " + Prefs.fastPingTimeoutMs(c) + " мс)…");
+        FastPing.Outcome fast = FastPing.filter(c, candidates, new FastPing.Log() {
+            @Override public void line(String message) { say(log, message); }
+        });
+        if (fast.cancelled) {
+            res.cancelled = true;
+            say(log, "Импорт остановлен на быстром отсеве");
+            return res;
+        }
+        candidates = fast.alive;
+        say(log, "Быстрый отсев: " + fast.summary());
+        if (candidates.isEmpty()) {
+            say(log, "Ни один сервер не открылся — проверьте подключение к интернету");
+            return res;
+        }
+
+        // --- 1) пинг: отсекает мёртвое до запуска ядра
         say(log, "Пингую " + candidates.size() + " конфигов…");
         ConfigTester.Outcome ping = ConfigTester.test(candidates,
                 Prefs.pingThreads(c), Prefs.pingTimeoutMs(c), new ConfigTester.Listener() {
@@ -148,8 +166,13 @@ public final class PoolIo {
                         ProxyConfig cfg = ping.alive.get(idx);
                         Probe.Result r = Probe.measureConfig(c, cfg, gate);
                         if (r.ok && r.kbps >= min) {
+                            Blacklist.forget(c, cfg.raw);
                             passed.add(new Pool.Entry(cfg.raw, r.kbps, cfg.latency,
                                     System.currentTimeMillis()));
+                        } else if (r.hard) {
+                            // «Связность есть, скорость не измерена» и прочие жёсткие
+                            // отказы — в чёрный список: такой конфиг рабочим не считается.
+                            Blacklist.add(c, cfg, r.reason);
                         }
                         int d = done.incrementAndGet();
                         if (d % 5 == 0 || d == total) {
