@@ -47,11 +47,24 @@ public final class VpnStart {
         launch(a, null, BypassVpnService.MODE_TOR);
     }
 
+    /**
+     * Остановить туннель.
+     *
+     * Сначала штатно: команда ACTION_STOP в сервис. Если система не даёт запустить
+     * сервис (Android 12+ из фона), гасим его напрямую через stopService — onDestroy
+     * всё равно снимает TUN, а «Остановить» должно работать всегда, а не молча тонуть
+     * в исключении.
+     */
     public static void stop(Context c) {
         try {
             Intent i = new Intent(c, BypassVpnService.class);
             i.setAction(BypassVpnService.ACTION_STOP);
             c.startService(i);
+            return;
+        } catch (Throwable ignored) {
+        }
+        try {
+            c.stopService(new Intent(c, BypassVpnService.class));
         } catch (Throwable ignored) {
         }
     }

@@ -1,0 +1,5 @@
+• "Stop" now really stops the VPN at any moment, including in the middle of a connection or a speed test. A worker that was bringing the channel up can no longer create the tunnel after the stop: every start has a generation number, the stale worker is interrupted, and a second safety pass a second later tears down hev, the core and the TUN if it appeared anyway.
+• A stop from the background is no longer lost: if the system refuses to start the service, it is shut down with stopService (onDestroy takes the tunnel down).
+• A freshly measured pool config no longer fails at connect time: connecting binds the core to a free port instead of the fixed 10811 (the previous core may still hold it), and speed is checked against three URLs, as in the pool build.
+• If split tunneling is on but the core came up without the routing rules, the connection is retried without them — split routing must not cost you connectivity.
+• The log now shows the port, the routing mode, the measured speed and the required threshold.
