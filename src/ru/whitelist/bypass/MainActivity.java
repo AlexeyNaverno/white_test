@@ -570,14 +570,10 @@ public class MainActivity extends Activity {
 
     private void toggleConnection() {
         if (BypassVpnService.isRunning() || BypassVpnService.isConnecting()) {
-            try {
-                Intent stop = new Intent(this, BypassVpnService.class);
-                stop.setAction(BypassVpnService.ACTION_STOP);
-                startService(stop);
-                log("Останавливаю туннель…");
-            } catch (Throwable t) {
-                log("Не удалось остановить сервис: " + t.getMessage());
-            }
+            // Общая точка остановки: она умеет и команду сервису, и прямой stopService,
+            // если система не даёт стартовать сервис из фона.
+            VpnStart.stop(this);
+            log("Останавливаю туннель…");
             return;
         }
         if (searching) {
