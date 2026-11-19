@@ -780,8 +780,8 @@ public class MainActivity extends Activity {
         searching = true;
         ConfigRepository.clearCancel();
         setBusy(true, "Сбор пула…");
-        uiLog("Сбор пула: обновляю списки, затем пакетами по " + POOL_BATCH
-                + " случайных конфигов — пинг, замер, и так до конца всех списков");
+        uiLog("Сбор пула: обновляю списки → дедупликация → кластеры провайдеров → "
+                + "партии по " + Prefs.batchSize(this) + " конфигов в ОДНОМ ядре");
 
         new Thread(new Runnable() {
             @Override public void run() {
@@ -904,123 +904,58 @@ public class MainActivity extends Activity {
                         }
                     }
 
-                    // 2) Порядок обхода списков случайный, а не «первые две тысячи строк»:
-                    // источники отдают файлы подряд, и при последовательном обходе все
-                    // дорожки занимал один список, пока до остальных не доходило дело.
-                    java.util.Collections.shuffle(all, new java.util.Random());
-
+                    // 2) БАТЧ-ЗАМЕР В ОДНОМ ЯДРЕ + КЛАСТЕРНАЯ ВЫБОРКА (0.1.18).
+                    //
+                    // Порядок обхода больше не случаен: конфиги одного провайдера — это
+                    // один кластер с общей судьбой, а партия составляется чересстрочно,
+                    // чтобы первые сто проб пришлись на сто РАЗНЫХ провайдеров. Плюс
+                    // дедупликация, «нерешённые» с прошлого раза первыми и TTL-вердикты
+                    // кластеров. Всё это внутри PoolScan; здесь только журнал и подсчёт.
                     final Map<String, Pool.Entry> pool = new LinkedHashMap<>();
                     for (Pool.Entry e : Pool.load(MainActivity.this)) {
                         String key = ConfigRepository.canonicalKey(e.raw);
                         if (key != null) pool.put(key, e);
                     }
-                    final int poolAtStart = pool.size();
                     final Map<String, Integer> why = java.util.Collections.synchronizedMap(
                             new LinkedHashMap<String, Integer>());
+                    int measuredOk = 0;
+                    int dpiBudget = DPI_RETRIES;
 
-                    int batches = (all.size() + POOL_BATCH - 1) / POOL_BATCH;
-                    int pinged = 0, alive = 0, reused = 0, measuredOk = 0, dpiBudget = DPI_RETRIES;
-                    uiLog("К перебору " + all.size() + " конфигов пакетами по " + POOL_BATCH
-                            + ": " + batches + " заходов. Потоков пинга "
-                            + Prefs.pingThreads(MainActivity.this) + ", дорожек замера "
-                            + Prefs.speedLanes(MainActivity.this));
+                    PoolScan.Outcome scan = PoolScan.run(MainActivity.this, all,
+                            new PoolScan.Log() {
+                                @Override public void line(String message) { uiLog(message); }
+                            });
+                    measuredOk += scan.ok;
+                    uiLog("Разбор списка: " + scan.summary());
+                    if (scan.cancelled) uiLog("Сбор остановлен");
 
-                    for (int from = 0; from < all.size(); from += POOL_BATCH) {
-                        if (ConfigRepository.isCancelled()) break;
-                        int batchNo = from / POOL_BATCH + 1;
-                        List<ProxyConfig> batch = new ArrayList<>(
-                                all.subList(from, Math.min(all.size(), from + POOL_BATCH)));
-                        uiLog("Пакет " + batchNo + "/" + batches + ": " + batch.size()
-                                + " конфигов (проверено " + pinged + " из " + all.size() + ")");
-
-                        // 2.1) пинг только этого пакета
-                        ConfigTester.Outcome ping = ConfigTester.test(batch,
-                                Prefs.pingThreads(MainActivity.this),
-                                Prefs.pingTimeoutMs(MainActivity.this),
-                                new ConfigTester.Listener() {
-                                    @Override public void onProgress(int done, int total, int ok,
-                                                                     int failed) {
-                                        if (done % 100 == 0 || done == total) {
-                                            uiLog("  пинг " + done + "/" + total
-                                                    + " → живых " + ok + ", мёртвых " + failed);
-                                        }
-                                    }
-                                });
-                        pinged += batch.size();
-                        if (ping.cancelled) {
-                            uiLog("Сбор остановлен");
-                            break;
-                        }
-                        alive += ping.alive.size();
-                        uiLog("  пинг: " + ping.summary());
-                        if (ping.alive.isEmpty()) continue;
-
-                        // 2.2) к замеру — без свежих замеров из пула (их не гоняем заново)
-                        List<ProxyConfig> work = new ArrayList<>();
-                        long now = System.currentTimeMillis();
-                        for (ProxyConfig cfg : ping.alive) {
-                            String key = ConfigRepository.canonicalKey(cfg.raw);
-                            Pool.Entry old = key == null ? null : pool.get(key);
-                            if (old != null && old.at > 0 && now - old.at < POOL_REUSE_MS) {
-                                reused++;
-                                continue;
-                            }
-                            work.add(cfg);
-                        }
-                        if (work.isEmpty()) {
-                            uiLog("  все живые уже замерены меньше "
-                                    + (POOL_REUSE_MS / 3600000) + " ч назад — пропускаю пакет");
-                            continue;
-                        }
-
-                        final List<ProxyConfig> failed =
-                                java.util.Collections.synchronizedList(new ArrayList<ProxyConfig>());
-                        int added = measureBatch(work, pool, why, failed);
-                        measuredOk += added;
-
-                        // 2.3) тем, кто не дал данных напрямую, — одна попытка через ciadpi.
-                        // Бюджет общий на весь сбор: DpiStrategies.PROBE держит один процесс.
-                        if (dpiBudget > 0 && !failed.isEmpty()
-                                && !ConfigRepository.isCancelled()) {
-                            List<ProxyConfig> retry;
-                            synchronized (failed) {
-                                retry = new ArrayList<>(failed);
-                            }
-                            int[] dpi = retryWithDpi(retry, pool, why, dpiBudget);
-                            dpiBudget -= dpi[0];
-                            measuredOk += dpi[1];
-                        }
-
-                        // 2.4) сохраняем прогресс после каждого пакета: если пользователь
-                        // остановит сбор, уже найденное останется в пуле.
-                        Pool.save(MainActivity.this, snapshot(pool));
-                        uiLog("Пакет " + batchNo + " готов: +" + added + " рабочих, в пуле "
-                                + pool.size() + " (проверено " + pinged + ", живых " + alive + ")");
-                    }
-
-                    List<Pool.Entry> snapshot = snapshot(pool);
-                    if (snapshot.size() == poolAtStart && !ConfigRepository.isCancelled()
-                            && !all.isEmpty()) {
-                        uiLog("Пакетный замер не дал новых рабочих — проверяю первые 20 по одному…");
-                        int upto = Math.min(20, all.size());
-                        List<Pool.Entry> again = Probe.measureSequential(MainActivity.this,
-                                new ArrayList<>(all.subList(0, upto)), upto);
-                        for (Pool.Entry e : again) {
+                    // 2.1) Кому батч не дал вердикта (не «данных нет», а «не успели») —
+                    // одна попытка через ciadpi. Бюджет общий на весь сбор.
+                    if (dpiBudget > 0 && !scan.failed.isEmpty()
+                            && !ConfigRepository.isCancelled()) {
+                        for (Pool.Entry e : Pool.load(MainActivity.this)) {
                             String key = ConfigRepository.canonicalKey(e.raw);
                             if (key != null) pool.put(key, e);
                         }
-                        snapshot = snapshot(pool);
-                        uiLog("По одному: рабочих " + again.size());
+                        int[] dpi = retryWithDpi(new ArrayList<>(scan.failed), pool, why, dpiBudget);
+                        dpiBudget -= dpi[0];
+                        measuredOk += dpi[1];
                     }
+
+                    final Map<String, Pool.Entry> poolNow = new LinkedHashMap<>();
+                    for (Pool.Entry e : Pool.load(MainActivity.this)) {
+                        String key = ConfigRepository.canonicalKey(e.raw);
+                        if (key != null) poolNow.put(key, e);
+                    }
+
+                    List<Pool.Entry> snapshot = snapshot(poolNow);
                     Pool.save(MainActivity.this, snapshot);
                     logWhy(why);
-                    if (reused > 0) {
-                        uiLog("Не перемерял свежие замеры: " + reused + " конфигов");
-                    }
                     final int n = snapshot.size();
                     final long best = n > 0 ? Pool.bestKbps(MainActivity.this) : -1;
-                    uiLog("Пул собран: " + n + " рабочих · пинг " + pinged + " · живых "
-                            + alive + " · замеров " + measuredOk
+                    uiLog("Пул собран: " + n + " рабочих · проверено " + scan.tested
+                            + " из " + scan.unique + " · каналов (кластеров) живых "
+                            + scan.clustersAlive + " · батч-замеров " + measuredOk
                             + (best > 0 ? " · лучший " + Prefs.speedText(best) : "")
                             + ". Порог: " + Prefs.minSpeedText(MainActivity.this));
                     runOnUiThread(new Runnable() {

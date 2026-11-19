@@ -458,6 +458,102 @@ public final class XrayEngine {
         }
     }
 
+    /**
+     * Батч-конфигурация: ОДНО ядро на целую пачку конфигов.
+     *
+     * Зачем. Раньше каждый конфиг проверялся своим процессом Xray: старт ядра, ожидание
+     * SOCKS, свой порт, своя память. Шесть таких дорожек — потолок для телефона, а на
+     * тысяче строк это минуты и десятки минут. Здесь строится одна конфигурация, в
+     * которой на каждый конфиг заведены свой SOCKS-inbound (`in-N`, порт basePort+N),
+     * свой outbound (`out-N`) и правило маршрутизации «in-N → out-N». Проверка пачки —
+     * это N обычных HTTP-запросов по локальным портам ОДНОГО процесса.
+     *
+     * Так же устроен замер в Throne (один экземпляр ядра на партию из 100 конфигов),
+     * и именно это даёт там «100 за раз, 3000 мс на пробу».
+     *
+     * Что НЕ попадает в батч: конфиги без TLS, которым нужен локальный ретранслятор
+     * ({@link #needsRelay}) — у них своя линия на dokodemo-door, и в общий батч они не
+     * встают. Такие проверяются отдельным путём, как раньше.
+     *
+     * @param cfgs     конфиги партии (порядок = порядок портов, i → basePort + i)
+     * @param basePort первый порт диапазона
+     * @return JSON конфигурации Xray
+     */
+    public static String buildBatchConfigJson(java.util.List<ProxyConfig> cfgs, int basePort,
+                                              boolean allowInsecure, String rawDns) {
+        if (cfgs == null || cfgs.isEmpty()) {
+            throw new IllegalArgumentException("пустая партия конфигов");
+        }
+        try {
+            JSONObject root = new JSONObject();
+            JSONObject log = new JSONObject();
+            // warning, а не info: сто строк лога на партию из ста конфигов не нужны.
+            log.put("loglevel", "warning");
+            root.put("log", log);
+
+            JSONArray inbounds = new JSONArray();
+            JSONArray outbounds = new JSONArray();
+            JSONArray rules = new JSONArray();
+
+            for (int i = 0; i < cfgs.size(); i++) {
+                ProxyConfig cfg = cfgs.get(i);
+                if (cfg == null) {
+                    throw new IllegalArgumentException("пустой конфиг в партии");
+                }
+                String inTag = "in-" + i;
+                String outTag = "out-" + i;
+
+                JSONObject inbound = new JSONObject();
+                inbound.put("tag", inTag)
+                        .put("listen", "127.0.0.1")
+                        .put("port", basePort + i)
+                        .put("protocol", "socks");
+                inbound.put("settings", new JSONObject().put("auth", "noauth").put("udp", true));
+                // sniffing не нужен: маршрутизация идёт по inboundTag, домены не разбираем.
+                inbounds.put(inbound);
+
+                JSONObject out = buildOutbound(cfg, allowInsecure, 0);
+                if (out == null) {
+                    throw new IllegalArgumentException(cfg.unsupportedReason != null
+                            ? cfg.unsupportedReason : "неподдерживаемый протокол: " + cfg.scheme);
+                }
+                out.put("tag", outTag);
+                outbounds.put(out);
+
+                rules.put(new JSONObject()
+                        .put("type", "field")
+                        .put("inboundTag", new JSONArray().put(inTag))
+                        .put("outboundTag", outTag));
+            }
+
+            outbounds.put(new JSONObject().put("tag", "direct").put("protocol", "freedom")
+                    .put("settings", new JSONObject()));
+            outbounds.put(new JSONObject().put("tag", "block").put("protocol", "blackhole")
+                    .put("settings", new JSONObject()));
+
+            root.put("inbounds", inbounds);
+            root.put("outbounds", outbounds);
+            root.put("routing", new JSONObject()
+                    .put("domainStrategy", "AsIs")
+                    .put("rules", rules));
+
+            // DNS общий на партию: адреса замера резолвятся один раз и кешируются ядром.
+            JSONArray servers = new JSONArray();
+            if (rawDns != null) {
+                for (String part : rawDns.split("[,;\\s]+")) {
+                    String t = part.trim();
+                    if (!t.isEmpty()) servers.put(t);
+                }
+            }
+            if (servers.length() == 0) servers.put("1.1.1.1");
+            root.put("dns", new JSONObject().put("servers", servers));
+            return root.toString();
+        } catch (org.json.JSONException e) {
+            throw new IllegalArgumentException("не удалось построить батч-конфиг Xray: "
+                    + e.getMessage(), e);
+        }
+    }
+
     private static JSONObject buildOutbound(ProxyConfig cfg, boolean allowInsecureGlobal,
                                             int relayPort)
             throws org.json.JSONException {

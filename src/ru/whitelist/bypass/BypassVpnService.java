@@ -75,8 +75,10 @@ public class BypassVpnService extends VpnService {
     private static final int MAX_SWITCH_TRIES = 3;
     /** Допуск при повторной проверке скорости: 80% от порога (сеть «дышит»). */
     private static final double MIN_SPEED_TOLERANCE = 0.8;
-    /** Сколько конфигов проверяем «вживую» при быстром поиске. */
+    /** Сколько конфигов проверяем «вживую» при быстром поиске (партией в одном ядре). */
     private static final int QUICK_PROBES = 12;
+    /** Потолок партии для быстрого поиска: больше не нужно, нам хватит двух рабочих. */
+    private static final int QUICK_BATCH = 40;
     /** Больше 300 конфигов пинговать перед быстрым поиском нет смысла. */
     private static final int QUICK_PING_CAP = 300;
 
@@ -744,24 +746,53 @@ public class BypassVpnService extends VpnService {
         sendStatus("connecting", "Пинг: " + ping.summary());
 
         List<ProxyConfig> found = new ArrayList<>();
-        int probes = Math.min(ping.alive.size(), QUICK_PROBES);
-        for (int i = 0; i < probes; i++) {
-            if (stopRequested.get() || ConfigRepository.isCancelled()) break;
-            ProxyConfig cfg = ping.alive.get(i);
-            sendStatus("connecting", "Проверка " + (i + 1) + "/" + probes
-                    + ": " + truncate(cfg.name, 30) + " · " + cfg.latency + " мс");
-            Probe.Result r = Probe.measureConfig(this, cfg, Prefs.gateTimeoutMs(this));
-            sendStatus("connecting", "  → " + r.text());
-            if (r.ok && r.kbps > 0) {
-                Pool.remember(this, cfg.raw, r.kbps, cfg.latency);
-                Blacklist.forget(this, cfg.raw);
-                found.add(cfg);
-                if (found.size() >= 2) break;
+        // С 0.1.18 — партией в одном ядре, а не по одному: 40 конфигов проверяются
+        // одновременно, старт ядра платится один раз. Раньше здесь поднималось до 12
+        // отдельных ядер подряд, и «быстрый поиск» занимал десятки секунд.
+        int probes = Math.min(ping.alive.size(),
+                Math.max(10, Math.min(Prefs.batchSize(this), QUICK_BATCH)));
+        List<ProxyConfig> batch = new ArrayList<>(ping.alive.subList(0, probes));
+        sendStatus("connecting", "Батч-проверка " + batch.size() + " конфигов в одном ядре…");
+        BatchProbe.Outcome bp = BatchProbe.run(this, batch, new BatchProbe.Log() {
+            @Override public void line(String message) {
+                sendStatus("connecting", message);
             }
-            // «Связность есть, скорость не измерена» и прочие жёсткие отказы —
-            // в чёрный список: конфиг, который отвечает 204 и не отдаёт данные,
-            // рабочим не считается.
-            if (r.hard) Blacklist.add(this, cfg, r.reason);
+        });
+        if (stopRequested.get() || ConfigRepository.isCancelled()) return found;
+        sendStatus("connecting", "  " + bp.summary());
+
+        // Лучшие — в пул: сортируем по измеренной скорости, «данные идут без цифры» — в конце.
+        List<BatchProbe.Result> ok = new ArrayList<>();
+        for (BatchProbe.Result r : bp.results) {
+            if (r.ok) ok.add(r);
+        }
+        java.util.Collections.sort(ok, new java.util.Comparator<BatchProbe.Result>() {
+            @Override public int compare(BatchProbe.Result a, BatchProbe.Result b) {
+                long ka = a.kbps > 0 ? a.kbps : 1;
+                long kb = b.kbps > 0 ? b.kbps : 1;
+                return Long.compare(kb, ka);
+            }
+        });
+        for (BatchProbe.Result r : ok) {
+            ProxyConfig cfg = r.cfg;
+            long kbps = r.kbps > 0 ? r.kbps : Prefs.minSpeedKbps(this);
+            Pool.remember(this, cfg.raw, kbps, r.ms);
+            Blacklist.forget(this, cfg.raw);
+            Candidates.remove(this, cfg.raw);
+            sendStatus("connecting", "  ✓ " + truncate(cfg.name, 34) + " · " + r.text());
+            found.add(cfg);
+            if (found.size() >= 2) break;
+        }
+        // Жёсткий отказ («ответ без данных») — в чёрный список; «не успели» — в
+        // «нерешённые», чтобы следующий прогон проверил их первыми.
+        for (BatchProbe.Result r : bp.results) {
+            if (r.ok) continue;
+            if (r.hard) {
+                Blacklist.add(this, r.cfg, r.reason);
+                Candidates.remove(this, r.cfg.raw);
+            } else {
+                Candidates.add(this, Net.key(this), r.cfg.raw, r.reason);
+            }
         }
         return found;
     }

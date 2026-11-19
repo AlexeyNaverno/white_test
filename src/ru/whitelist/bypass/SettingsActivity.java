@@ -67,7 +67,8 @@ public class SettingsActivity extends Activity {
             editGateTimeout, editStrategyWifi, editStrategyLte, editVpnDns, editMonitor,
             editSwitchTimeout, editTorBridges, editTorExtra, editTorBridgeWait, editPingTargets,
             editHealthUrls, editLanes, editDpiSources, editDpiOnlyStrategy, editDpiOnlyUrls,
-            editFastThreads, editFastTimeout, editMaxConfigs, editSplitDomains, editSplitApps;
+            editFastThreads, editFastTimeout, editMaxConfigs, editSplitDomains, editSplitApps,
+            editBatchSize, editBatchThreads;
     /** Строка с тремя регионами на странице «Списки». */
     private LinearLayout regionRow;
     private TextView regionNow, regionNote;
@@ -271,16 +272,32 @@ public class SettingsActivity extends Activity {
         editFastTimeout = numberField(String.valueOf(Prefs.fastPingTimeoutMs(this)));
         label("Таймаут быстрого отсева, мс (900 по умолчанию)", Help.FAST_PING_TIMEOUT);
         add(editFastTimeout);
-        note("Как устроена проверка теперь — три ступени, от дешёвой к дорогой.\n"
+
+        // --- батч-замер: одно ядро на партию (с 0.1.18)
+        editBatchSize = numberField(String.valueOf(Prefs.batchSize(this)));
+        label("Конфигов в партии батч-замера (до " + Prefs.MAX_BATCH_SIZE
+                + ", по умолчанию " + Prefs.DEFAULT_BATCH_SIZE + ")", Help.BATCH_SIZE);
+        add(editBatchSize);
+        editBatchThreads = numberField(String.valueOf(Prefs.batchThreads(this)));
+        label("Проб одновременно внутри партии (по умолчанию — вся партия)",
+                Help.BATCH_THREADS);
+        add(editBatchThreads);
+        note("Как устроена проверка теперь — четыре ступени, от дешёвой к дорогой.\n"
                 + "1) Быстрый отсев: простое TCP-подключение к серверу (900 мс, 384 потока). "
                 + "Конфиги группируются по паре host:port, поэтому на 1200 строк обычно "
                 + "150–300 серверов, и каждый проверяется один раз. Мёртвое отваливается за "
                 + "секунды, в чёрный список при этом никто не попадает.\n"
                 + "2) Полный пинг: TLS-handshake и обычный TCP для живых серверов — тот же, "
                 + "что и раньше.\n"
-                + "3) Замер скорости через поднятое ядро — только для прошедших обе ступени.\n"
-                + "Так «1000 конфигов» перестают означать «минуты ожидания»: до ядра доходят "
-                + "единицы.");
+                + "3) Батч-замер в ОДНОМ ядре: партия из 100 конфигов поднимается одним "
+                + "процессом Xray (на каждый конфиг — свой локальный порт и своё правило "
+                + "маршрутизации), пробы идут одновременно, окно 3 с, читается 64 КБ. "
+                + "Старт ядра платится один раз на партию, а не на каждый конфиг.\n"
+                + "4) Очередь обхода — по кластерам провайдеров: первая партия состоит из "
+                + "разных провайдеров, поэтому рабочий конфиг находится на первых секундах, "
+                + "а не после трёх сотен строк одного упавшего сервиса.\n"
+                + "Так «5000 конфигов» перестают означать «десятки минут»: до ядра доходят "
+                + "сотни, и проверяются они партиями по сто.");
 
         editPingTargets = multiField(Prefs.join(Prefs.pingTargets(this)), 3);
         label("Цель TCP-пинга «есть ли интернет» (host:port; одна строка — норма)", Help.PING_TARGETS);
@@ -960,6 +977,46 @@ public class SettingsActivity extends Activity {
         });
         addAction(clearBlacklist, "Чёрный список", Help.CLEAR_BLACKLIST);
 
+        // --- «нерешённые» и вердикты кластеров (с 0.1.18) ---
+        final String netNow = Net.key(this);
+        final int candSize = Candidates.size(this, netNow);
+        final TextView candOut = new TextView(this);
+        candOut.setTextColor(TEXT_DIM);
+        candOut.setTextSize(12);
+        candOut.setText(candSize == 0
+                ? "Нерешённых конфигов нет: всё, что проверяли, получило вердикт."
+                : "Нерешённых конфигов: " + candSize + " (" + Net.label(netNow) + "). "
+                        + "Это те, кого проверили, но вердикта нет: не уложились в окно "
+                        + "замера, оборвалась закачка, ответ без тела. В пул они не идут "
+                        + "(скорость не доказана), в чёрный список — тоже (приговора нет). "
+                        + "В следующем сборе проверяются первыми. Живут "
+                        + (Candidates.TTL_MS / 3600000) + " ч.");
+        add(candOut);
+
+        final TextView clusterOut = new TextView(this);
+        clusterOut.setTextColor(TEXT_DIM);
+        clusterOut.setTextSize(12);
+        clusterOut.setText("Кластеры провайдеров (" + Net.label(netNow) + "): "
+                + ClusterStore.summary(this, netNow) + ". Провайдер, у которого ни одна "
+                + "проверенная строка не поднялась, пропускается "
+                + (ClusterStore.TTL_DEAD_MS / 3600000) + " ч; живой проверяется первым.");
+        add(clusterOut);
+
+        Button clearCand = smallButton("Очистить «нерешённые» и вердикты кластеров");
+        clearCand.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                int n = Candidates.size(SettingsActivity.this, netNow);
+                String was = ClusterStore.summary(SettingsActivity.this, netNow);
+                Candidates.clearAll(SettingsActivity.this);
+                ClusterStore.clearAll(SettingsActivity.this);
+                candOut.setText("Очищено: нерешённых " + n + ", кластеры (" + was + "). "
+                        + "Следующий сбор пула проверит всё заново.");
+                clusterOut.setText("Кластеры провайдеров: вердиктов нет.");
+                toast("«Нерешённые» и вердикты кластеров очищены");
+            }
+        });
+        addAction(clearCand, "Нерешённые и кластеры", Help.CANDIDATES);
+
         Button clearAll = smallButton("Удалить скачанные списки и пул");
         clearAll.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
@@ -1299,6 +1356,12 @@ public class SettingsActivity extends Activity {
                         Prefs.MAX_FAST_THREADS));
         e.putInt(Prefs.FAST_PING_TIMEOUT_MS,
                 Prefs.clamp(parseInt(editFastTimeout, Prefs.DEFAULT_FAST_TIMEOUT_MS), 200, 5000));
+        e.putInt(Prefs.BATCH_SIZE,
+                Prefs.clamp(parseInt(editBatchSize, Prefs.DEFAULT_BATCH_SIZE), 20,
+                        Prefs.MAX_BATCH_SIZE));
+        e.putInt(Prefs.BATCH_THREADS,
+                Prefs.clamp(parseInt(editBatchThreads, Prefs.batchSize(this)), 4,
+                        Prefs.MAX_BATCH_SIZE));
         e.putInt(Prefs.MAX_CONFIGS,
                 Prefs.clamp(parseInt(editMaxConfigs, Prefs.DEFAULT_MAX_CONFIGS), 200,
                         Prefs.MAX_CONFIGS_CAP));

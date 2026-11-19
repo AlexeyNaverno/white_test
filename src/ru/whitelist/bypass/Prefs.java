@@ -42,6 +42,11 @@ public final class Prefs {
     public static final String FAST_PING_THREADS = "fast_ping_threads";
     /** Таймаут быстрого TCP-отсева, мс. */
     public static final String FAST_PING_TIMEOUT_MS = "fast_ping_timeout_ms";
+
+    /** Размер партии для батч-замера в одном ядре (с 0.1.18). */
+    public static final String BATCH_SIZE = "batch_size";
+    /** Сколько проб идёт одновременно внутри партии. */
+    public static final String BATCH_THREADS = "batch_threads";
     /** Сколько экземпляров ядра мерить скорость одновременно. */
     public static final String SPEED_LANES = "speed_lanes";
     public static final String GATE_TIMEOUT_MS = "gate_timeout_ms";
@@ -367,6 +372,29 @@ public final class Prefs {
 
     public static int fastPingTimeoutMs(Context c) {
         return clamp(get(c).getInt(FAST_PING_TIMEOUT_MS, DEFAULT_FAST_TIMEOUT_MS), 200, 5000);
+    }
+
+    // --- батч-замер (одно ядро на пачку) ---
+
+    /** Сколько конфигов проверяем одной партией: 100 — как в Throne и потолок батча. */
+    public static final int DEFAULT_BATCH_SIZE = 100;
+    public static final int MAX_BATCH_SIZE = 200;
+
+    /**
+     * Размер партии. Меньше 20 — теряется смысл «одно ядро на пачку», больше 100 —
+     * ядро держит сотню outbound'ов и сотню портов, а выигрыша уже нет.
+     */
+    public static int batchSize(Context c) {
+        return clamp(get(c).getInt(BATCH_SIZE, DEFAULT_BATCH_SIZE), 20, MAX_BATCH_SIZE);
+    }
+
+    /**
+     * Сколько проб внутри партии идёт одновременно. По умолчанию — вся партия сразу
+     * (100): проба упирается в сеть, а не в процессор, и именно так замер занимает
+     * секунды, а не минуты.
+     */
+    public static int batchThreads(Context c) {
+        return clamp(get(c).getInt(BATCH_THREADS, batchSize(c)), 4, MAX_BATCH_SIZE);
     }
 
     // --- проверки ---
