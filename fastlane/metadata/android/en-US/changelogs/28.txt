@@ -1,0 +1,5 @@
+• Configs are now checked in batches inside ONE core: each config of a batch gets its own local port and routing rule, so a hundred probes run at once (3 s window, 64 KB read). The core startup is paid once per batch instead of once per config — pool building becomes many times faster. Batch size is configurable (batch_size, default 100).
+• The queue is walked by provider clusters: configs are grouped by the SNI domain (or the subnet), a batch is made of DIFFERENT providers, so a working config shows up within the first seconds. A live provider is remembered for 24 h, a dead one for 6 h and goes to the back of the queue.
+• A third list — "undecided": checked but no verdict (ran out of time, download stalled, empty body). They never enter the pool or the blacklist and are checked first on the next run. Visible and clearable in "Data → Undecided and clusters".
+• Deduplication before checking (duplicates from different sources no longer take probes) and fresh measurements are not repeated for 24 hours.
+• Quick search on an empty pool also uses a batch: up to 40 configs in one core instead of 12 sequential core starts.

@@ -62,7 +62,9 @@ public final class SettingsIo {
             Prefs.SPLIT_RU_APPS_EXTRA,
             Prefs.MAX_CONFIGS,
             Prefs.FAST_PING_THREADS,
-            Prefs.FAST_PING_TIMEOUT_MS));
+            Prefs.FAST_PING_TIMEOUT_MS,
+            Prefs.BATCH_SIZE,
+            Prefs.BATCH_THREADS));
 
     private SettingsIo() {
     }
