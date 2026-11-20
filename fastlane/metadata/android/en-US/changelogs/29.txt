@@ -1,0 +1,3 @@
+• A simpler main screen: the action rail is down to two buttons — "Build configs" (was "Pool") and "Logs" (was "Journal").
+• Removed "Search" (pool building already finds working configs within seconds), "Working" (it is the first settings tab), "DPI" (still available in settings) and the region picker on the main screen — region now lives in settings, Europe by default.
+• Live counter while building: "Found working: N — you can stop / checked X of Y" under the power button, with the same number on the "■ Stop N" button. The pool is saved after every batch, so you can stop as soon as you have enough without watching the log.

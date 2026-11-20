@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<title>Обход Белых Списков — макет интерфейса 0.1.18</title>
+<title>Обход Белых Списков — макет интерфейса 0.1.19</title>
 <style>
   :root{
     --bg:#0B0F14; --surface:#131A24; --surface2:#1B2532; --stroke:#243040;
@@ -75,10 +75,10 @@
 </style>
 </head>
 <body>
-<h1 class="page">Макет интерфейса 0.1.18</h1>
+<h1 class="page">Макет интерфейса 0.1.19</h1>
 <p class="lead">Это <b>макет, а не скриншот</b>: он собран из тех же токенов, что теперь использует
 приложение (цвета, отступы 4/8/12/16/24, радиусы 10/16/20, шрифты 11/12/14/16/24). Тексты и
-элементы — настоящие, из кода 0.1.18. Точные размеры на телефоне зависят от плотности экрана.</p>
+элементы — настоящие, из кода 0.1.19. Точные размеры на телефоне зависят от плотности экрана.</p>
 
 <div class="row">
 
@@ -105,37 +105,36 @@
         Wi-Fi: 12 конфигов · лучший 512 КБ/с<br>
         <span style="color:var(--dim);font-size:12px">Нажмите, чтобы выбрать конфиг вручную</span>
       </div>
+      <div class="note" style="text-align:center;font-size:13px;color:var(--accent);margin-top:10px">
+        Найдено рабочих: 7 — можно остановить<br>
+        <span style="font-size:12px;color:var(--dim)">проверено 300 из 1200 · нажмите, чтобы посмотреть</span>
+      </div>
+      <div class="note" style="margin-top:2px">Пока идёт сбор, эта строка живёт счётчиком: число
+        найденных рабочих продублировано на кнопке («■ Стоп 7») — следить за логами не нужно,
+        найденное сохраняется после каждой партии.</div>
 
       <div style="display:flex;gap:6px;margin-top:20px">
-        <div class="btn" style="flex:1;height:56px;margin-top:0;padding:0;font-size:11px;border-radius:16px;display:flex;align-items:center;justify-content:center;text-align:center">Поиск</div>
-        <div class="btn" style="flex:1;height:56px;margin-top:0;padding:0;font-size:11px;border-radius:16px;display:flex;align-items:center;justify-content:center;text-align:center">Пул</div>
-        <div class="btn" style="flex:1;height:56px;margin-top:0;padding:0;font-size:11px;border-radius:16px;display:flex;align-items:center;justify-content:center;text-align:center">Рабочие</div>
-        <div class="btn" style="flex:1;height:56px;margin-top:0;padding:0;font-size:11px;border-radius:16px;display:flex;align-items:center;justify-content:center;text-align:center">DPI</div>
-        <div class="btn" style="flex:1;height:56px;margin-top:0;padding:0;font-size:11px;border-radius:16px;display:flex;align-items:center;justify-content:center;text-align:center">Журнал</div>
+        <div class="btn" style="flex:1;height:56px;margin-top:0;padding:0;font-size:13px;border-radius:16px;display:flex;align-items:center;justify-content:center;text-align:center">Сбор конфигураций</div>
+        <div class="btn" style="flex:1;height:56px;margin-top:0;padding:0;font-size:13px;border-radius:16px;display:flex;align-items:center;justify-content:center;text-align:center">Логи</div>
       </div>
-
-      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:10px;font-size:12px;color:var(--dim)">
-        Регион:
-        <span class="chip solid on">Европа</span>
-        <span class="chip off">Азия</span>
-        <span class="chip off">Америка</span>
-      </div>
-      <div class="note" style="margin-top:2px">Регион задаёт одну цель пинга и одну ссылку замера:
-        Европа и Америка — GitHub, Азия — сайт Lenovo своего региона.</div>
+      <div class="note" style="margin-top:4px">С 0.1.19 в линейке две кнопки: «Поиск», «Рабочие», «DPI» и выбор
+        региона с главного убраны — «Рабочие» это первая вкладка настроек, «DPI» — режим из настроек,
+        регион по умолчанию Европа.</div>
 
       <div class="card">
         <div class="row-between">
-          <div class="overline">Журнал</div>
+          <div class="overline">Логи</div>
           <div class="btn ghost" style="height:32px;font-size:13px">Копировать</div>
         </div>
-        <div class="log">Подключено: Amsterdam-1 · 512 КБ/с
-пакет 2/6 · в пуле 12 · пинг 400/1200
-скорость 12/12 · рабочих 12</div>
-        <div class="note">Консоль скрыта, пока её не открыли кнопкой «Журнал»; при ошибке
+        <div class="log">Кластеры: 210 провайдеров, из них с несколькими строками 96
+Партия 3/12: 100 конфигов · в пуле 7 новых
+  ✓ Amsterdam-1 · 512 КБ/с · 1.2 с
+  итог партии: проб 100, рабочих 3, ЧС 12, нерешённых 9 за 4.6 с</div>
+        <div class="note">Консоль скрыта, пока её не открыли кнопкой «Логи»; при ошибке
           раскрывается сама.</div>
       </div>
 
-      <div class="footer">Обход Белых Списков 0.1.18 (28)<br>
+      <div class="footer">Обход Белых Списков 0.1.19 (29)<br>
         В уведомлении — «Пауза», «Переключить» и «Остановить».</div>
     </div>
     <div class="caption-phone">Главный экран</div>
@@ -212,7 +211,7 @@
       </div>
 
       <div class="btn primary" style="margin-top:24px">Сохранить настройки</div>
-      <div class="footer">Обход Белых Списков 0.1.18 · Xray-core: 26.10.31</div>
+      <div class="footer">Обход Белых Списков 0.1.19 · Xray-core: 26.10.31</div>
     </div>
     <div class="caption-phone">Настройки</div>
   </div>
