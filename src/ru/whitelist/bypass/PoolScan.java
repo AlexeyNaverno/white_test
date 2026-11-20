@@ -42,6 +42,13 @@ public final class PoolScan {
 
     public interface Log {
         void line(String message);
+
+        /**
+         * Живой счётчик для главного экрана: сколько рабочих уже найдено и сколько
+         * проверено из всей очереди. Нужен, чтобы человек видел результат, не открывая
+         * лог, и мог остановить сбор, когда найденного достаточно.
+         */
+        void progress(int ok, int tested, int total);
     }
 
     /** Итог прогона. */
@@ -99,6 +106,7 @@ public final class PoolScan {
             out.ms = System.currentTimeMillis() - started;
             return out;
         }
+        if (log != null) log.progress(0, 0, out.unique);
 
         // 2) кластеры + вердикты прошлых прогонов
         String net = Net.key(c);
@@ -237,6 +245,9 @@ public final class PoolScan {
                 log.line("  " + probe.summary() + " · всего рабочих " + out.ok
                         + " · в пуле " + Pool.count(c));
             }
+            if (log != null) {
+                log.progress(out.ok, out.tested, out.unique);
+            }
             if (out.ok > 0 && out.ok <= 3) {
                 if (log != null) {
                     log.line("Уже можно подключаться: в пуле есть рабочие конфиги ("
@@ -293,6 +304,7 @@ public final class PoolScan {
         }
 
         out.ms = System.currentTimeMillis() - started;
+        if (log != null) log.progress(out.ok, out.tested, out.unique);
         return out;
     }
 }

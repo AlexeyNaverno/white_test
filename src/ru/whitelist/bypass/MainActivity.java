@@ -28,16 +28,17 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Экран из трёх кнопок:
- *   1) Подключить — берёт самый быстрый конфиг из пула (пул пуст → сам найдёт рабочий);
- *   2) Быстрый поиск — найти и запомнить один рабочий VPN;
- *   3) Собрать пул — обновить ВСЕ списки из источников и замерить скорость у живых.
+ * Главный экран — две вещи по сути:
+ *   1) Подключить — берёт самый быстрый конфиг из пула (пул пуст → сервис сам найдёт
+ *      рабочий партией в одном ядре, см. BypassVpnService.quickFind);
+ *   2) Сбор конфигураций — обновить ВСЕ списки из источников, прогнать кластеры и
+ *      партии в одном ядре (PoolScan) и сложить рабочих в пул.
+ * Плюс «Логи» (консоль) и строка пула с живым счётчиком найденного.
+ *
+ * С 0.1.19 отдельного «быстрого поиска» нет: сбор пула находит рабочие конфиги на
+ * первых секундах, а счётчик на главном показывает, когда найденного уже достаточно.
  */
 public class MainActivity extends Activity {
 
@@ -75,10 +76,18 @@ public class MainActivity extends Activity {
     private final StringBuilder logBuffer = new StringBuilder();
     private static final int LOG_MAX_CHARS = 40000;
     private Button powerButton;
-    /** Нижняя линейка: квадратные кнопки, подпись по центру — ничего не переносится. */
-    private RailButton btnQuick, btnPool, btnWorkers, btnDpi, btnConsole;
-    /** Выбор целевого региона под линейкой. */
-    private LinearLayout regionRow;
+    /**
+     * Нижняя линейка: с 0.1.19 ровно две кнопки — «Сбор конфигураций» и «Логи».
+     *
+     * Что убрано и почему: «Поиск» (быстрый поиск одного конфига) — сбор пула находит
+     * рабочие конфиги на первых секундах, отдельный ускоренный поиск больше ничего не
+     * добавлял; «Рабочие» — это первая вкладка настроек; «DPI» — второстепенный режим,
+     * он остался в настройках; выбор региона тоже переехал в настройки, по умолчанию
+     * Европа.
+     */
+    private RailButton btnPool, btnConsole;
+    /** Живой счётчик сбора для главного экрана: «найдено рабочих N». */
+    private volatile String livePool = null;
     private LinearLayout consoleCard;
     private boolean consoleOpen = false;
     private View btnSettings;
@@ -225,65 +234,23 @@ public class MainActivity extends Activity {
         quickRowLp.topMargin = dp(14);
         quickRow.setLayoutParams(quickRowLp);
 
-        btnQuick = railButton("Поиск");
-        btnQuick.root.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                if (searching) { cancelSearch(); return; }
-                startQuickSearch();
-            }
-        });
-        quickRow.addView(btnQuick.root, railLp(0));
-
-        btnPool = railButton("Пул");
+        btnPool = railButton("Сбор конфигураций");
         btnPool.root.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 if (searching) { cancelSearch(); return; }
                 startBuildPool();
             }
         });
-        quickRow.addView(btnPool.root, railLp(1));
+        quickRow.addView(btnPool.root, railLp(0));
 
-        btnWorkers = railButton("Рабочие");
-        btnWorkers.root.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                startActivity(new Intent(MainActivity.this, PoolActivity.class));
-            }
-        });
-        quickRow.addView(btnWorkers.root, railLp(2));
-
-        btnDpi = railButton("DPI");
-        btnDpi.root.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                if (BypassVpnService.isRunning() || BypassVpnService.isConnecting()) {
-                    toast("Сначала отключите текущее подключение");
-                    return;
-                }
-                VpnStart.connectDpiOnly(MainActivity.this);
-            }
-        });
-        quickRow.addView(btnDpi.root, railLp(3));
-
-        btnConsole = railButton("Журнал");
+        btnConsole = railButton("Логи");
         btnConsole.root.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { toggleConsole(); }
         });
-        quickRow.addView(btnConsole.root, railLp(4));
+        quickRow.addView(btnConsole.root, railLp(1));
         root.addView(quickRow);
 
-        // ---- целевой регион: под кнопками, отдельной тихой строкой.
-        // Регион задаёт, по каким сайтам пингуется сеть и с какой ссылки меряется скорость:
-        // Европа и Америка — GitHub, Азия — региональный сайт Lenovo (см. Regions).
-        regionRow = new LinearLayout(this);
-        regionRow.setOrientation(LinearLayout.HORIZONTAL);
-        regionRow.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams regionLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        regionLp.topMargin = dp(10);
-        regionRow.setLayoutParams(regionLp);
-        root.addView(regionRow);
-        fillRegionRow();
-
-        // ---- консоль: скрыта, пока её не открыли кнопкой
+        // ---- консоль: скрыта, пока её не открыли кнопкой «Логи»
         consoleCard = Ui.card(this);
         LinearLayout.LayoutParams consoleLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
@@ -294,7 +261,7 @@ public class MainActivity extends Activity {
         LinearLayout logHead = new LinearLayout(this);
         logHead.setOrientation(LinearLayout.HORIZONTAL);
         logHead.setGravity(Gravity.CENTER_VERTICAL);
-        logHead.addView(Ui.overline(this, "Журнал"), new LinearLayout.LayoutParams(0,
+        logHead.addView(Ui.overline(this, "Логи"), new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         Button copyLog = Ui.ghost(this, "Копировать");
         copyLog.setOnClickListener(new View.OnClickListener() {
@@ -369,36 +336,6 @@ public class MainActivity extends Activity {
         return lp;
     }
 
-    /** Перерисовать строку регионов: выбранный — акцентом, остальные тихие. */
-    private void fillRegionRow() {
-        if (regionRow == null) return;
-        regionRow.removeAllViews();
-        final String current = Prefs.region(this);
-        TextView title = Ui.caption(this, "Регион:");
-        title.setPadding(0, 0, dp(8), 0);
-        regionRow.addView(title);
-        for (final String id : Regions.ids()) {
-            TextView chip = Ui.tab(this, Regions.label(id));
-            boolean on = id.equals(current);
-            Ui.paintChip(chip, on ? Ui.ACCENT : Ui.TEXT_DIM, on, this);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.rightMargin = dp(6);
-            chip.setLayoutParams(lp);
-            chip.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View v) {
-                    if (id.equals(Prefs.region(MainActivity.this))) return;
-                    Prefs.setRegion(MainActivity.this, id);
-                    fillRegionRow();
-                    uiLog("Регион проверки: " + Regions.label(id)
-                            + " · пинг " + Regions.pingTarget(id)
-                            + " · скорость " + Regions.speedUrl(id));
-                }
-            });
-            regionRow.addView(chip);
-        }
-    }
-
     /** Квадратная кнопка линейки: подпись и её цвет — единственное, что меняется извне. */
     private static final class RailButton {
         final LinearLayout root;
@@ -419,7 +356,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Консоль открывается кнопкой «Журнал» и закрывается повторным нажатием. */
+    /** Консоль открывается кнопкой «Логи» и закрывается повторным нажатием. */
     private void toggleConsole() {
         setConsole(!consoleOpen);
     }
@@ -559,8 +496,8 @@ public class MainActivity extends Activity {
                     getSystemService(CLIPBOARD_SERVICE);
             if (cb == null) return;
             String text = logBuffer.length() == 0 ? "Лог пуст" : logBuffer.toString();
-            cb.setPrimaryClip(android.content.ClipData.newPlainText("Журнал", text));
-            toast("Журнал скопирован");
+            cb.setPrimaryClip(android.content.ClipData.newPlainText("Логи", text));
+            toast("Логи скопированы");
         } catch (Throwable t) {
             toast("Не удалось скопировать журнал");
         }
@@ -695,9 +632,19 @@ public class MainActivity extends Activity {
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         if (poolText == null) return;
+                        // Пока идёт сбор, в этой строке живёт счётчик найденного:
+                        // пользователь видит, что рабочих уже достаточно, и останавливает
+                        // сбор сам, не открывая лог.
+                        String live = livePool;
+                        if (searching && live != null) {
+                            poolText.setText(live);
+                            poolText.setTextColor(Ui.ACCENT);
+                            return;
+                        }
+                        poolText.setTextColor(Ui.TEXT);
                         if (n == 0) {
                             poolText.setText("Пул «" + netLabel + "» пуст. «Подключить» найдёт "
-                                    + "рабочий сам, «Пул» — запас на будущее.");
+                                    + "рабочий сам, «Сбор конфигураций» — запас на будущее.");
                             return;
                         }
                         StringBuilder sb = new StringBuilder();
@@ -716,56 +663,30 @@ public class MainActivity extends Activity {
         }, "pool-card").start();
     }
 
-    // ------------------------------------------------------------------ поиск: 1 рабочий VPN
-
-    private void startQuickSearch() {
-        if (BypassVpnService.isRunning()) {
-            toast("Остановите туннель перед поиском");
-            return;
-        }
-        searching = true;
-        ConfigRepository.clearCancel();
-        setBusy(true, "Поиск…");
-        uiLog("Быстрый поиск: сеть → круги по новым конфигам (пул не перепроверяю)");
-
-        new Thread(new Runnable() {
-            @Override public void run() {
-                try {
-                    QuickSearch.Found found = QuickSearch.find(MainActivity.this,
-                            new QuickSearch.Log() {
-                                @Override public void line(String message) { uiLog(message); }
-                            });
-                    if (found == null) {
-                        uiLog("Рабочий конфиг не найден — попробуйте «Собрать пул» или добавьте источники");
-                        return;
-                    }
-                    adopt(found.cfg, found.kbps);
-                    finishOk(found.cfg.name, found.kbps);
-                } catch (Throwable t) {
-                    Log.e("MainActivity", "quick search failed", t);
-                    uiLog("Ошибка поиска: " + t.getMessage());
-                } finally {
-                    searching = false;
-                    runOnUiThread(new Runnable() {
-                        @Override public void run() { setBusy(false, null); }
-                    });
-                }
-            }
-        }, "quick-search").start();
-    }
-
-    private void adopt(ProxyConfig cfg, long kbps) {
-        Prefs.setCurrentConfig(this, cfg.raw, cfg.name, cfg.host, cfg.port);
-        Pool.remember(this, cfg.raw, kbps, cfg.latency);
-        Blacklist.forget(this, cfg.raw);   // он работает — приговор снимаем
-    }
-
-    private void finishOk(final String name, final long kbps) {
-        uiLog("Найден рабочий: " + truncate(name, 50) + " · " + kbps + " КБ/с");
+    /**
+     * Живой счётчик сбора на главном экране.
+     *
+     * Зачем: рабочие конфиги находятся уже на первых секундах, и человеку обычно хватает
+     * нескольких. Раньше это было видно только в логе — приходилось держать консоль
+     * открытой и следить. Теперь число найденных стоит прямо под кнопкой питания, а
+     * повторное нажатие на «■ Стоп» останавливает сбор (найденное уже сохранено).
+     */
+    private void showScanProgress(final int ok, final int tested, final int total) {
+        String found = ok == 0
+                ? "Ищем рабочие конфиги…"
+                : "Найдено рабочих: " + ok + (ok == 1 ? " конфиг" : " конфигов")
+                        + (ok >= 3 ? " — можно остановить" : "");
+        livePool = found + "\nпроверено " + tested + " из " + total
+                + (ok == 0 ? " · список пополняется" : " · нажмите, чтобы посмотреть");
+        if (poolText == null) return;
         runOnUiThread(new Runnable() {
             @Override public void run() {
-                toast("Готово: " + truncate(name, 40) + " · " + kbps + " КБ/с");
-                refreshPoolCard();
+                if (!searching) return;
+                poolText.setText(livePool);
+                poolText.setTextColor(ok > 0 ? Ui.ACCENT : Ui.TEXT_DIM);
+                // Счётчик продублирован на кнопке: видно даже когда строка описания
+                // занята чужой подписью.
+                if (btnPool != null) btnPool.setText(ok > 0 ? "■ Стоп " + ok : "■ Стоп");
             }
         });
     }
@@ -924,6 +845,9 @@ public class MainActivity extends Activity {
                     PoolScan.Outcome scan = PoolScan.run(MainActivity.this, all,
                             new PoolScan.Log() {
                                 @Override public void line(String message) { uiLog(message); }
+                                @Override public void progress(int ok, int tested, int total) {
+                                    showScanProgress(ok, tested, total);
+                                }
                             });
                     measuredOk += scan.ok;
                     uiLog("Разбор списка: " + scan.summary());
@@ -990,74 +914,6 @@ public class MainActivity extends Activity {
         synchronized (pool) {
             return pool.size();
         }
-    }
-
-    /**
-     * Замер пакета «дорожками»: каждая — свой экземпляр ядра Xray.
-     * Найденное сразу складывается в {@code pool}; непрошедшие напрямую попадают в
-     * {@code failed} — им потом даётся одна попытка через DPI-обход.
-     */
-    private int measureBatch(final List<ProxyConfig> work,
-                             final Map<String, Pool.Entry> pool,
-                             final Map<String, Integer> why,
-                             final List<ProxyConfig> failed) {
-        final int lanes = Prefs.speedLanes(this);
-        final int min = Prefs.minSpeedKbps(this);
-        final int total = work.size();
-        final AtomicInteger cursor = new AtomicInteger();
-        final AtomicInteger done = new AtomicInteger();
-        final AtomicInteger okCount = new AtomicInteger();
-        ExecutorService lane = Executors.newFixedThreadPool(lanes);
-        for (int i = 0; i < lanes; i++) {
-            lane.execute(new Runnable() {
-                @Override public void run() {
-                    for (;;) {
-                        if (ConfigRepository.isCancelled()) break;
-                        int idx = cursor.getAndIncrement();
-                        if (idx >= total) break;
-                        ProxyConfig cfg = work.get(idx);
-                        Probe.Result r = Probe.measureConfig(MainActivity.this, cfg,
-                                Prefs.gateTimeoutMs(MainActivity.this));
-                        boolean passed = r.ok && r.kbps >= min;
-                        if (passed) {
-                            okCount.incrementAndGet();
-                            Blacklist.forget(MainActivity.this, cfg.raw);
-                            String key = ConfigRepository.canonicalKey(cfg.raw);
-                            Pool.Entry e = new Pool.Entry(cfg.raw, r.kbps, cfg.latency,
-                                    System.currentTimeMillis());
-                            synchronized (pool) {
-                                if (key != null) pool.put(key, e);
-                            }
-                        } else {
-                            boolean hard = r.hard;
-                            bump(why, hard ? r.reason + " → в чёрный список" : r.reason);
-                            // Ядро не поднялось / данных нет — в чёрный список: в следующий
-                            // раз его даже не пингуем. «Мягкие» отказы — кандидаты на DPI.
-                            if (r.hard) {
-                                Blacklist.add(MainActivity.this, cfg, r.reason);
-                            } else {
-                                synchronized (failed) {
-                                    failed.add(cfg);
-                                }
-                            }
-                        }
-                        int d = done.incrementAndGet();
-                        if (d % 10 == 0 || d == total || passed) {
-                            uiLog("  скорость " + d + "/" + total + " · рабочих "
-                                    + poolSize(pool)
-                                    + (passed ? " · +" + Prefs.speedText(r.kbps)
-                                              : " · " + truncate(cfg.name, 24) + ": " + r.reason));
-                        }
-                    }
-                }
-            });
-        }
-        lane.shutdown();
-        try {
-            lane.awaitTermination(2, TimeUnit.HOURS);
-        } catch (InterruptedException ignored) {
-        }
-        return okCount.get();
     }
 
     /**
@@ -1141,13 +997,13 @@ public class MainActivity extends Activity {
     private void setBusy(boolean busy, String label) {
         // ВАЖНО: кнопки остаются активными. Пока идёт работа, они и есть «Остановить».
         // Раньше здесь стояло setEnabled(!busy) — из-за этого остановить поиск было нельзя.
-        btnQuick.setEnabled(true);
         btnPool.setEnabled(true);
-        btnQuick.setText(busy ? "■ Поиск" : "Поиск");
-        btnPool.setText(busy ? "■ Пул" : "Пул");
-        btnQuick.setTextColor(busy ? Ui.DANGER : Ui.TEXT);
+        btnPool.setText(busy ? "■ Стоп" : "Сбор конфигураций");
         btnPool.setTextColor(busy ? Ui.DANGER : Ui.TEXT);
-        if (!busy) refreshPoolCard();
+        if (!busy) {
+            livePool = null;
+            refreshPoolCard();
+        }
     }
 
     private void uiLog(final String message) {
