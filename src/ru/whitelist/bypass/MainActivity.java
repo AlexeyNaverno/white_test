@@ -813,6 +813,36 @@ public class MainActivity extends Activity {
                             uiLog("Сбор остановлен");
                             return;
                         }
+                        // 0.1.21: что не открылось по TCP — в чёрный список, но в отдельное
+                        // ведро на сутки (см. Blacklist.PING_TTL_MS): таких записей тысячи,
+                        // и «сеть моргнула» не должно стоить конфигу недели.
+                        // Приговоры — только если сеть вообще что-то пускает: если
+                        // открылось три сервера из восьми тысяч, виноват канал, а не
+                        // конфиги, и сметать их в чёрный список нельзя.
+                        final int minAlive = Math.max(3, fast.endpoints / 100);
+                        if (!fast.alive.isEmpty() && fast.aliveEndpoints >= minAlive) {
+                            final java.util.Set<String> aliveKeys = new java.util.HashSet<>();
+                            for (ProxyConfig cfg : fast.alive) {
+                                aliveKeys.add(ConfigRepository.canonicalKey(cfg.raw));
+                            }
+                            List<String> deadRaws = new ArrayList<>();
+                            for (ProxyConfig cfg : all) {
+                                if (!aliveKeys.contains(ConfigRepository.canonicalKey(cfg.raw))) {
+                                    deadRaws.add(cfg.raw);
+                                }
+                            }
+                            if (!deadRaws.isEmpty()) {
+                                Blacklist.addPingFail(MainActivity.this,
+                                        Net.key(MainActivity.this), deadRaws);
+                                uiLog("TCP-порт не открылся: " + deadRaws.size()
+                                        + " конфигов → в чёрный список на "
+                                        + (Blacklist.PING_TTL_MS / 3600000) + " ч");
+                            }
+                        } else if (!fast.alive.isEmpty()) {
+                            uiLog("TCP-отсев: открылось " + fast.aliveEndpoints + " серверов из "
+                                    + fast.endpoints + " — похоже на проблемы канала, "
+                                    + "приговоры не выношу");
+                        }
                         all = fast.alive;
                         uiLog("Быстрый отсев: " + fast.summary());
                         if (all.isEmpty()) {
@@ -890,8 +920,15 @@ public class MainActivity extends Activity {
 
                     // 2.1) Кому батч не дал вердикта (не «данных нет», а «не успели») —
                     // одна попытка через ciadpi. Бюджет общий на весь сбор.
+                    //
+                    // 0.1.21: сюда попадают ТОЛЬКО конфиги, прошедшие TCP-отсев, но у
+                    // которых не скачался файл. Не открывшийся порт — это не «обойти
+                    // DPI», это приговор другого рода: он уже в чёрном списке.
                     if (dpiBudget > 0 && !scan.failed.isEmpty()
                             && !ConfigRepository.isCancelled()) {
+                        uiLog("DPI-добор: " + Math.min(dpiBudget, scan.failed.size())
+                                + " из " + scan.failed.size() + " конфигов, прошедших TCP, "
+                                + "но не скачавших файл");
                         for (Pool.Entry e : Pool.load(MainActivity.this)) {
                             String key = ConfigRepository.canonicalKey(e.raw);
                             if (key != null) pool.put(key, e);

@@ -1,0 +1,6 @@
+• Whatever fails the TCP fast-filter now goes to the blacklist — in a separate bucket with a one-day lifetime: there can be thousands of such entries, and a network hiccup shouldn't cost a config a week. The "undecided" count drops several-fold.
+• A batch where the core opened no port at all is no longer written off as unprobed: it is split in half, and the culprit (a config the core refuses) gets a personal verdict. One poisoned config no longer sinks the other ninety-nine or creates phantom dead providers.
+• If the core fails systematically (three batches in a row), no verdicts are issued at all: configs get "check again later" and return first instead of being swept into the blacklist.
+• DPI retry is now only for configs that passed TCP but did not download a file. A closed port no longer goes through the bypass path — it is a different kind of verdict.
+• Blacklist and "undecided" writes are batched: every row used to rewrite the whole list, so on thousands of configs the build drowned in that, not in the network.
+• Cleaner log: fast-filter progress in ten steps instead of a line per 50 servers, and the build summary now tells how many providers are alive now and how many were marked dead in this run.

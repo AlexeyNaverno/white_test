@@ -183,6 +183,27 @@ public final class XrayEngine {
     }
 
     /**
+     * Годится ли конфиг для ПАРТИИ: пробный сбор outbound'а теми же аргументами, что и в
+     * {@link #buildBatchConfigJson}. null — годится, иначе причина.
+     *
+     * Зачем отдельно от {@link #compatProblem}: тот ловит заведомо неподъёмное (транспорт,
+     * flow, reality без pbk), но пропускает строки, на которых падает сам сбор JSON партии.
+     * А падение сборки валило ВСЮ партию — в логе это и были партии, где «портов открылось
+     * 0 за 18 мс»: ядро даже не запускалось. Такая строка теперь получает личный приговор
+     * до старта партии (0.1.21).
+     */
+    public static String outboundProblem(ProxyConfig cfg) {
+        if (cfg == null) return "пустой конфиг";
+        try {
+            if (buildOutbound(cfg, false, 0) != null) return null;
+            return cfg.unsupportedReason != null
+                    ? cfg.unsupportedReason : "неподдерживаемый протокол: " + cfg.scheme;
+        } catch (Throwable t) {
+            return t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+        }
+    }
+
+    /**
      * @param allowRelay true — конфиги без TLS разрешены: они пойдут через локальный
      *                   ретранслятор (см. {@link #needsRelay}), и правило ядра
      *                   «только к приватному адресу» сработает на loopback.

@@ -78,8 +78,9 @@ public final class PoolScan {
             return "проверено " + tested + " из " + unique + " (дублей " + duplicates
                     + "), рабочих " + ok + ", в ЧС " + hard + ", нерешённых " + undecided
                     + (poolFirst > 0 ? ", из пула подтвердили " + poolBack + " из " + poolFirst : "")
-                    + ", кластеров " + clusters + " (живых " + clustersAlive
-                    + ", мёртвых " + clustersDead + ") за " + seconds();
+                    + ", кластеров " + clusters + " (живых сейчас " + clustersAlive
+                    + ", новых мёртвых " + clustersNewlyDead
+                    + ", в памяти мёртвых " + clustersDead + ") за " + seconds();
         }
 
         private String seconds() {
@@ -220,8 +221,23 @@ public final class PoolScan {
             if (probe.cancelled) {
                 out.cancelled = true;
             }
+            // Записи в списки — пачкой на партию: поштучная запись в SharedPreferences
+            // на тысячах строк была квадратичной и тормозила сбор (0.1.21).
+            List<String> okRaws = new ArrayList<>();
+            List<String> hardRaws = new ArrayList<>();
+            List<String> candRaws = new ArrayList<>();
+            List<String> candReasons = new ArrayList<>();
             for (BatchProbe.Result r : probe.results) {
                 ProxyConfig cfg = r.cfg;
+                if (r.configBroken) {
+                    // Ядро не принимает саму строку: приговор строке, но не провайдеру.
+                    out.hard++;
+                    hardRaws.add(cfg.raw);
+                    if (log != null) {
+                        log.line("  ✗ " + cfg.name + " — " + r.reason + " → в ЧС");
+                    }
+                    continue;
+                }
                 String clusterKey = Cluster.key(cfg);
                 int[] cnt = perCluster.get(clusterKey);
                 if (cnt == null) {
@@ -236,7 +252,9 @@ public final class PoolScan {
                     int minKbps = Prefs.minSpeedKbps(c);
                     if (kbps <= 0 || r.bytes < Probe.MIN_SAMPLE_BYTES) {
                         out.undecided++;
-                        Candidates.add(c, net, cfg.raw, "скорость не измерена");
+                        candRaws.add(cfg.raw);
+                        candReasons.add("скорость не измерена");
+                        out.failed.add(cfg);      // файл не скачался — кандидат на DPI-добор
                         if (log != null) {
                             log.line("  ~ " + cfg.name + " — файл не скачался целиком, "
                                     + "скорость не измерена → в «нерешённые»");
@@ -245,7 +263,9 @@ public final class PoolScan {
                     }
                     if (kbps < minKbps) {
                         out.undecided++;
-                        Candidates.add(c, net, cfg.raw, "медленнее порога: " + kbps + " КБ/с");
+                        candRaws.add(cfg.raw);
+                        candReasons.add("медленнее порога: " + kbps + " КБ/с");
+                        out.failed.add(cfg);      // канал есть, но бутылочное горлышко — пробуем обход
                         if (log != null) {
                             log.line("  ~ " + cfg.name + " · " + Prefs.speedText(kbps)
                                     + " — медленнее порога " + Prefs.minSpeedText(c)
@@ -259,14 +279,13 @@ public final class PoolScan {
                     if (key != null && poolKeys.contains(key)) out.poolBack++;
                     Pool.remember(c, cfg.raw, kbps, r.ms, "");
                     Blacklist.forget(c, cfg.raw);
-                    Candidates.remove(c, net, cfg.raw);
+                    okRaws.add(cfg.raw);
                     if (log != null) {
                         log.line("  ✓ " + cfg.name + " · " + r.text());
                     }
                 } else if (r.hard) {
                     out.hard++;
-                    Blacklist.add(c, net, cfg, r.reason);
-                    Candidates.remove(c, net, cfg.raw);
+                    hardRaws.add(cfg.raw);
                     if (log != null) {
                         log.line("  ✗ " + cfg.name + " — " + r.reason + " → в ЧС");
                     }
@@ -274,10 +293,17 @@ public final class PoolScan {
                     relay.add(cfg);
                 } else {
                     out.undecided++;
-                    Candidates.add(c, net, cfg.raw, r.reason);
+                    candRaws.add(cfg.raw);
+                    candReasons.add(r.reason);
                     out.failed.add(cfg);
                 }
             }
+            if (!okRaws.isEmpty()) Candidates.removeAll(c, net, okRaws);
+            if (!hardRaws.isEmpty()) {
+                Candidates.removeAll(c, net, hardRaws);
+                Blacklist.addAll(c, net, hardRaws);
+            }
+            if (!candRaws.isEmpty()) Candidates.addAll(c, net, candRaws, candReasons);
             // Прогресс: пул уже сохранён, подключаться можно в любой момент.
             if (log != null) {
                 log.line("  " + probe.summary() + " · всего рабочих " + out.ok
