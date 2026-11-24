@@ -36,15 +36,20 @@ public final class ConfigRepository {
     private ConfigRepository() {}
 
     private static final String FILE = "configs.txt";
-    private static final int MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024;
+    /** С 0.1.20 корпус забивается до 50 000 строк, поэтому и потолок ответа больше. */
+    private static final int MAX_DOWNLOAD_BYTES = 24 * 1024 * 1024;
+    /** Кэш «по одному файлу на источник» + метки etag/Last-Modified. */
+    private static final String CACHE_DIR = "sources";
+    private static final String META = "bypass_source_meta";
+    private static final String UA = "WhitelistBypass/0.1.20";
     /**
      * Лимиты прямого канала. В этих списках — килобайты, а не мегабайты, поэтому
      * двух секунд на источник хватает с запасом; всё, что медленнее, просто не наш случай.
      * Лимит считается на каждый источник отдельно — общего «на всё про всё» нет.
      */
-    private static final int CONNECT_TIMEOUT_MS = 2000;
-    private static final int READ_TIMEOUT_MS = 2000;
-    private static final int SOURCE_BUDGET_MS = 2000;
+    private static final int CONNECT_TIMEOUT_MS = 4000;
+    private static final int READ_TIMEOUT_MS = 5000;
+    private static final int SOURCE_BUDGET_MS = 12000;
     /**
      * Лимиты для Tor: он медленный по определению, но это резервный канал, и здесь
      * времени даём заметно больше — иначе резерв никогда не сработает.
@@ -81,12 +86,18 @@ public final class ConfigRepository {
         public long elapsedMs;
         public boolean timedOut;
         public boolean viaTor;
+        /** Источники, которые не изменились с прошлой загрузки (HTTP 304). */
+        public int sourcesUnchanged;
+        /** Источники, взятые из локальной копии (не ответили, но копия есть). */
+        public int sourcesFromCache;
         public final List<String> messages = new ArrayList<>();
 
         @Override public String toString() {
             StringBuilder sb = new StringBuilder();
             sb.append("источников OK ").append(sourcesOk).append('/').append(sourcesTried);
             if (sourcesMissing > 0) sb.append(", недоступно ").append(sourcesMissing);
+            if (sourcesUnchanged > 0) sb.append(", без изменений ").append(sourcesUnchanged);
+            if (sourcesFromCache > 0) sb.append(", из копии ").append(sourcesFromCache);
             sb.append(", конфигов ").append(parsed);
             if (viaTor) sb.append(" (через Tor)");
             sb.append(", в хранилище ").append(stored);
@@ -94,6 +105,16 @@ public final class ConfigRepository {
                     .append(Math.max(1, elapsedMs / 1000)).append(" с");
             if (timedOut) sb.append(" — упёрлись в лимит времени");
             return sb.toString();
+        }
+    }
+
+    /**
+     * Источник не изменился с прошлой загрузки (HTTP 304). Это НЕ ошибка: берём
+     * локальную копию и не тратим трафик — с 0.1.20 качаем только новое.
+     */
+    public static final class NotModified extends IOException {
+        NotModified() {
+            super("не изменился с прошлой загрузки");
         }
     }
 
@@ -183,10 +204,11 @@ public final class ConfigRepository {
     /**
      * Вычеркнуть из скачанного хранилища то, что доказанно нерабочее в ОБЕИХ сетях.
      *
-     * Зачем: списки приходят целиком каждое обновление, и «мёртвые» конфиги возвращались
-     * бы в них снова и снова — их пришлось бы каждый раз пинговать и мерить заново.
-     * После чистки сбор пула видит только то, что ещё не доказало свою непригодность.
-     * Записи в чёрном списке живут неделю, поэтому через TTL конфиг может вернуться.
+     * С 0.1.20 НЕ ВЫЗЫВАЕТСЯ (метод оставлен для ручных сценариев): физическая чистка
+     * configs.txt противоречит «забить корпус до 50 000 со всех источников» — после неё
+     * источники приносили те же строки заново, а редкие рабочие конфиги исчезали вместе
+     * с мёртвыми. Отсев по чёрному списку теперь делается в памяти: Blacklist.filter(net)
+     * в начале сборки пула.
      *
      * Тонкость: файл списков один на обе сети, а чёрные списки с 0.1.15 разные. Если
      * вычеркнуть конфиг, не поднявшийся только у оператора, он исчезнет и для Wi-Fi, где
@@ -231,6 +253,65 @@ public final class ConfigRepository {
     public static void clearDownloaded(Context c) {
         File f = configsFile(c);
         if (f.isFile()) f.delete();
+        // Копии источников и метки HTTP-кэша тоже: иначе после «удалить всё» следующий
+        // сбор возьмёт копии и решит, что скачивать нечего.
+        File[] cached = cacheDir(c).listFiles();
+        if (cached != null) {
+            for (File file : cached) {
+                if (file.isFile()) file.delete();
+            }
+        }
+        c.getSharedPreferences(META, Context.MODE_PRIVATE).edit().clear().apply();
+    }
+
+    // ------------------------------------------------------------ кэш источников (0.1.20)
+
+    /**
+     * Кэш одного источника: файл в files/sources/<hash>.txt.
+     *
+     * Зачем отдельный файл на источник, а не общий configs.txt: при скачивании «только
+     * нового» источник может ответить 304 (не изменился) — и его строки должны остаться в
+     * корпусе, даже если другие источники обновились. Из кэша строки и берутся.
+     */
+    private static File cacheDir(Context c) {
+        File dir = new File(c.getFilesDir(), CACHE_DIR);
+        if (!dir.isDirectory()) dir.mkdirs();
+        return dir;
+    }
+
+    private static File cacheFile(Context c, String url) {
+        return new File(cacheDir(c), Integer.toHexString(url.hashCode()) + ".txt");
+    }
+
+    private static List<String> readCache(Context c, String url) {
+        return readLines(cacheFile(c, url));
+    }
+
+    private static void writeCache(Context c, String url, List<String> lines) {
+        if (lines == null || lines.isEmpty()) return;
+        writeAll(cacheFile(c, url), lines);
+    }
+
+    private static String metaValue(Context c, String url, String field) {
+        return c.getSharedPreferences(META, Context.MODE_PRIVATE)
+                .getString(field + "|" + url, "");
+    }
+
+    private static void saveMeta(Context c, String url, String etag, String lastModified) {
+        c.getSharedPreferences(META, Context.MODE_PRIVATE).edit()
+                .putString("etag|" + url, etag == null ? "" : etag)
+                .putString("lastmod|" + url, lastModified == null ? "" : lastModified)
+                .apply();
+    }
+
+    /** Байты, записанные в конкретный файл (для кэша переиспользуем общую запись). */
+    private static void writeAll(File f, List<String> lines) {
+        StringBuilder sb = new StringBuilder();
+        for (String l : lines) sb.append(l).append('\n');
+        try (FileOutputStream fos = new FileOutputStream(f, false)) {
+            fos.write(sb.toString().getBytes(StandardCharsets.UTF_8));
+        } catch (IOException ignored) {
+        }
     }
 
     // ------------------------------------------------------------------ ключ дедупликации
@@ -300,15 +381,37 @@ public final class ConfigRepository {
             if (progress != null) progress.onMessage("Скачиваю: " + shortSource(src));
             long[] bytes = new long[1];
             long t0 = System.currentTimeMillis();
+            List<String> cached = readCache(c, src);
+            List<String> lines = null;
+            String how;
             try {
-                List<String> lines = fetch(src, null, bytes);
+                // Условная загрузка: сервер сам скажет, изменилось ли что-то с прошлого раза.
+                lines = fetchConditional(c, src, null, bytes);
+                writeCache(c, src, lines);
                 res.sourcesOk++;
                 res.bytes += bytes[0];
-                int added = collect(unique, lines, res, max);
-                if (progress != null) {
-                    progress.onMessage(shortSource(src) + ": +" + added
-                            + " (всего " + unique.size() + "), " + (bytes[0] / 1024) + " КБ за "
-                            + Math.max(1, (System.currentTimeMillis() - t0) / 1000) + " с");
+                how = "+" + (bytes[0] / 1024) + " КБ за "
+                        + Math.max(1, (System.currentTimeMillis() - t0) / 1000) + " с";
+            } catch (NotModified e) {
+                if (cached.isEmpty()) {
+                    // 304, а копии нет (её чистили в настройках) — забираем файл целиком.
+                    try {
+                        lines = fetch(src, null, bytes, false);
+                        writeCache(c, src, lines);
+                        res.sourcesOk++;
+                        res.bytes += bytes[0];
+                        how = "+" + (bytes[0] / 1024) + " КБ (копии не было)";
+                    } catch (Exception again) {
+                        res.messages.add("Не ответил " + shortSource(src) + ": "
+                                + again.getMessage());
+                        retryViaTor.add(src);
+                        how = null;
+                    }
+                } else {
+                    // Не изменился — берём сохранённую копию: трафик не тратим, строки не теряем.
+                    lines = cached;
+                    res.sourcesUnchanged++;
+                    how = "не изменился — беру сохранённую копию (" + cached.size() + " строк)";
                 }
             } catch (SourceError e) {
                 if (e.missing) {
@@ -317,10 +420,30 @@ public final class ConfigRepository {
                     continue;   // репозитория нет — ни зеркало, ни Tor не помогут
                 }
                 res.messages.add("Не ответил " + shortSource(src) + ": " + e.getMessage());
-                retryViaTor.add(src);
+                if (!cached.isEmpty()) {
+                    lines = cached;
+                    res.sourcesFromCache++;
+                    how = "нет ответа — беру сохранённую копию (" + cached.size() + " строк)";
+                } else {
+                    retryViaTor.add(src);
+                    how = null;
+                }
             } catch (Exception e) {
                 res.messages.add("Не ответил " + shortSource(src) + ": " + e.getMessage());
-                retryViaTor.add(src);
+                if (!cached.isEmpty()) {
+                    lines = cached;
+                    res.sourcesFromCache++;
+                    how = "нет ответа — беру сохранённую копию (" + cached.size() + " строк)";
+                } else {
+                    retryViaTor.add(src);
+                    how = null;
+                }
+            }
+            if (lines == null) continue;
+            int added = collect(unique, lines, res, max);
+            if (progress != null) {
+                progress.onMessage(shortSource(src) + ": +" + added
+                        + " (всего " + unique.size() + "), " + how);
             }
             if (unique.size() >= max) break;
         }
@@ -424,10 +547,46 @@ public final class ConfigRepository {
      * если репозитория больше нет (404/410) — зеркало не пробуем, это только трата времени.
      */
     private static List<String> fetch(String urlStr, Proxy proxy, long[] bytesOut) throws IOException {
+        return fetch(urlStr, proxy, bytesOut, false);
+    }
+
+    private static List<String> fetch(String urlStr, Proxy proxy, long[] bytesOut,
+                                      boolean conditional) throws IOException {
         IOException last = null;
         for (String candidate : candidates(urlStr)) {
             try {
-                return doFetch(candidate, proxy, bytesOut);
+                return doFetch(null, candidate, proxy, bytesOut, conditional);
+            } catch (SourceError e) {
+                if (e.missing) throw e;
+                last = e;
+            } catch (IOException e) {
+                last = e;
+            }
+        }
+        throw last != null ? last : new IOException("нет адреса для " + urlStr);
+    }
+
+    /**
+     * Условная загрузка (с 0.1.20): спрашиваем сервер, изменился ли файл, и качаем только
+     * если изменился.
+     *
+     * Метки etag/Last-Modified привязаны к ОРИГИНАЛЬНОМУ адресу: 304 от него означает, что
+     * наша копия ровно та же. Зеркала (jsDelivr) пробуем без условий — у них своя версия
+     * файла, и «не изменился» у зеркала ничего не говорит о нашей копии.
+     *
+     * @throws NotModified если файл не менялся — вызывающий берёт локальную копию
+     */
+    private static List<String> fetchConditional(Context c, String urlStr, Proxy proxy,
+                                                 long[] bytesOut) throws IOException {
+        IOException last = null;
+        List<String> cands = candidates(urlStr);
+        for (int i = 0; i < cands.size(); i++) {
+            String candidate = cands.get(i);
+            boolean conditional = i == 0;
+            try {
+                return doFetch(c, candidate, proxy, bytesOut, conditional);
+            } catch (NotModified e) {
+                throw e;      // наша копия свежая — дальше пробовать незачем
             } catch (SourceError e) {
                 if (e.missing) throw e;
                 last = e;
@@ -473,6 +632,11 @@ public final class ConfigRepository {
     }
 
     private static List<String> doFetch(String urlStr, Proxy proxy, long[] bytesOut) throws IOException {
+        return doFetch(null, urlStr, proxy, bytesOut, false);
+    }
+
+    private static List<String> doFetch(Context ctx, String urlStr, Proxy proxy, long[] bytesOut,
+                                        boolean conditional) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) (proxy != null
                 ? new URL(urlStr).openConnection(proxy)
                 : new URL(urlStr).openConnection());
@@ -484,14 +648,30 @@ public final class ConfigRepository {
             conn.setConnectTimeout(connectTimeout);
             conn.setReadTimeout(readTimeout);
             conn.setInstanceFollowRedirects(true);
-            conn.setRequestProperty("User-Agent", "WhitelistBypass/0.1.14");
+            conn.setRequestProperty("User-Agent", UA);
             conn.setRequestProperty("Accept", "text/plain, */*");
+            String etag = "";
+            String lastMod = "";
+            if (conditional && ctx != null) {
+                etag = metaValue(ctx, urlStr, "etag");
+                lastMod = metaValue(ctx, urlStr, "lastmod");
+                if (!etag.isEmpty()) conn.setRequestProperty("If-None-Match", etag);
+                if (!lastMod.isEmpty()) conn.setRequestProperty("If-Modified-Since", lastMod);
+            }
 
             int code;
             try {
                 code = conn.getResponseCode();
             } catch (java.net.SocketTimeoutException e) {
                 throw new SourceError("нет ответа за " + (connectTimeout / 1000) + " с", 0);
+            }
+            if (code == 304) {
+                // Файл не менялся с прошлой загрузки: качать нечего, берём копию.
+                throw new NotModified();
+            }
+            if (conditional && ctx != null && code >= 200 && code < 300) {
+                saveMeta(ctx, urlStr, conn.getHeaderField("ETag"),
+                        conn.getHeaderField("Last-Modified"));
             }
             if (code == 404 || code == 410 || code == 451) {
                 throw new SourceError("HTTP " + code + " — источника больше нет", code);

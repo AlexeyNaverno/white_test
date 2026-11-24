@@ -18,17 +18,21 @@ import java.util.Set;
  *
  * Теперь:
  *
+ *   0) рабочие из пула (0.1.20) ставятся в САМОЕ НАЧАЛО очереди и вычищаются из рабочего
+ *      списка: они перемеряются первыми, и в пул возвращаются только те, что реально
+ *      скачали файл. Не прошёл — вылетает молча, без «мёртвого» балласта в рабочих;
  *   1) дедупликация — одна строка на конфиг (дубли из разных сборников не занимают пробы);
  *   2) кластеры: конфиги группируются по провайдеру ({@link Cluster}), внутри кластера они
  *      с одной судьбой;
- *   3) «нерешённые» из прошлого прогона ({@link Candidates}) идут первыми — они уже
+ *   3) «нерешённые» из прошлого прогона ({@link Candidates}) идут следующими — они уже
  *      отсеяны по TCP, значит дешёвые;
  *   4) очередь «чересстрочная»: партия из 100 — это 100 РАЗНЫХ провайдеров, а кластеры,
  *      признанные мёртвыми по TTL ({@link ClusterStore}), уходят в конец;
  *   5) каждая партия проверяется в ОДНОМ ядре ({@link BatchProbe}): сто проб
  *      одновременно, окно 3 с, 64 КБ на пробу;
- *   6) результат раскладывается сразу: рабочие — в пул, «ответ без данных» — в чёрный
- *      список, «не успели/оборвалось» — в «нерешённые». Пул сохраняется после каждой
+ *   6) результат раскладывается сразу: в пул — ТОЛЬКО конфиги с измеренной скоростью
+ *      (файл реально скачался и прошёл порог), «ответ без данных» — в чёрный список,
+ *      «не успели/оборвалось/мало данных» — в «нерешённые». Пул сохраняется после каждой
  *      партии, поэтому подключаться можно, не дожидаясь конца обхода.
  *
  * Итог: первые рабочие конфиги появляются на первых секундах, полное покрытие — за время
@@ -36,9 +40,6 @@ import java.util.Set;
  */
 public final class PoolScan {
     private PoolScan() {}
-
-    /** Сколько свежий замер считается годным и не перемеряется. */
-    public static final long REUSE_MS = 24L * 60 * 60 * 1000;
 
     public interface Log {
         void line(String message);
@@ -64,7 +65,10 @@ public final class PoolScan {
         public int ok;
         public int hard;
         public int undecided;
-        public int reused;
+        /** Сколько рабочих из пула перемерялось первыми (0.1.20). */
+        public int poolFirst;
+        /** Из них вернулись в пул (подтвердили скорость). */
+        public int poolBack;
         public long ms;
         public boolean cancelled;
         /** Кого имеет смысл добить через DPI-обход (не «данные не идут», а «не успели»). */
@@ -73,6 +77,7 @@ public final class PoolScan {
         public String summary() {
             return "проверено " + tested + " из " + unique + " (дублей " + duplicates
                     + "), рабочих " + ok + ", в ЧС " + hard + ", нерешённых " + undecided
+                    + (poolFirst > 0 ? ", из пула подтвердили " + poolBack + " из " + poolFirst : "")
                     + ", кластеров " + clusters + " (живых " + clustersAlive
                     + ", мёртвых " + clustersDead + ") за " + seconds();
         }
@@ -94,12 +99,37 @@ public final class PoolScan {
         Outcome out = new Outcome();
         if (all != null) out.total = all.size();
 
-        // 1) дедупликация
-        List<ProxyConfig> unique = Cluster.dedupe(all);
+        // 0) рабочие из пула — в САМОЕ НАЧАЛО очереди и из пула вон (0.1.20).
+        // Пул очищается до перезамера: в рабочие вернутся только те, кто подтвердит
+        // измеренную скорость. Не прошёл — вылетает молча, без балласта в «рабочих».
+        String net = Net.key(c);
+        List<Pool.Entry> poolBefore = Pool.load(c);
+        List<ProxyConfig> poolCfgs = new ArrayList<>();
+        Set<String> poolKeys = new HashSet<>();
+        for (Pool.Entry e : poolBefore) {
+            ProxyConfig p = ProxyConfig.parse(e.raw, "пул", false);
+            if (p == null || !p.supported || p.host == null || p.host.isEmpty() || p.port <= 0) {
+                continue;
+            }
+            p.latency = e.pingMs;
+            String k = ConfigRepository.canonicalKey(p.raw);
+            if (k == null || !poolKeys.add(k)) continue;
+            poolCfgs.add(p);
+        }
+        out.poolFirst = poolCfgs.size();
+        if (out.poolFirst > 0 && log != null) {
+            log.line("Рабочие из пула: " + out.poolFirst + " — в начало очереди; "
+                    + "из пула убираются до подтверждения скорости");
+        }
+
+        // 1) дедупликация: сначала рабочие из пула, потом весь корпус
+        List<ProxyConfig> union = new ArrayList<>(poolCfgs);
+        if (all != null) union.addAll(all);
+        List<ProxyConfig> unique = Cluster.dedupe(union);
         out.unique = unique.size();
-        out.duplicates = Math.max(0, out.total - out.unique);
+        out.duplicates = Math.max(0, union.size() - out.unique);
         if (out.duplicates > 0 && log != null) {
-            log.line("Дубликаты: " + out.total + " → " + out.unique
+            log.line("Дубликаты: " + union.size() + " → " + out.unique
                     + " (вычеркнуто " + out.duplicates + ")");
         }
         if (unique.isEmpty()) {
@@ -109,7 +139,6 @@ public final class PoolScan {
         if (log != null) log.progress(0, 0, out.unique);
 
         // 2) кластеры + вердикты прошлых прогонов
-        String net = Net.key(c);
         Map<String, List<ProxyConfig>> clusters = Cluster.group(unique);
         Set<String> dead = ClusterStore.dead(c, net);
         out.clusters = clusters.size();
@@ -121,51 +150,36 @@ public final class PoolScan {
                     + " · состояние: " + ClusterStore.summary(c, net));
         }
 
-        // 3) «нерешённые» — первыми
+        // 3) очередь: рабочие из пула → «нерешённые» → остальные (чересстрочно)
         Set<String> known = new HashSet<>();
         for (Candidates.Entry e : Candidates.all(c, net)) {
             String k = ConfigRepository.canonicalKey(e.raw);
             if (k != null && !k.isEmpty()) known.add(k);
         }
-        List<ProxyConfig> order = new ArrayList<>();
         List<ProxyConfig> undecided = new ArrayList<>();
         List<ProxyConfig> rest = Cluster.interleave(clusters, dead);
+        List<ProxyConfig> tail = new ArrayList<>();
         for (ProxyConfig cfg : rest) {
             String k = ConfigRepository.canonicalKey(cfg.raw);
+            if (k != null && poolKeys.contains(k)) continue;     // уже в голове очереди
             if (k != null && known.contains(k)) undecided.add(cfg);
-            else order.add(cfg);
+            else tail.add(cfg);
         }
-        int undecidedFirst = undecided.size();
-        order.addAll(0, undecided);
-        if (undecidedFirst > 0 && log != null) {
-            log.line("Нерешённых с прошлого раза: " + undecidedFirst + " — проверяю первыми");
-        }
-
-        // 4) что уже есть в пуле и не протухло — не перемеряем
-        Map<String, Pool.Entry> pool = new LinkedHashMap<>();
-        for (Pool.Entry e : Pool.load(c)) {
-            String key = ConfigRepository.canonicalKey(e.raw);
-            if (key != null) pool.put(key, e);
-        }
-        long now = System.currentTimeMillis();
         List<ProxyConfig> queue = new ArrayList<>();
-        for (ProxyConfig cfg : order) {
-            String key = ConfigRepository.canonicalKey(cfg.raw);
-            Pool.Entry old = key == null ? null : pool.get(key);
-            if (old != null && old.at > 0 && now - old.at < REUSE_MS) {
-                out.reused++;
-                continue;
-            }
-            queue.add(cfg);
-        }
-        if (out.reused > 0 && log != null) {
-            log.line("Свежих замеров (моложе " + (REUSE_MS / 3600000) + " ч): " + out.reused
-                    + " — не перемеряю");
+        queue.addAll(poolCfgs);
+        queue.addAll(undecided);
+        queue.addAll(tail);
+        if (!undecided.isEmpty() && log != null) {
+            log.line("Нерешённых с прошлого раза: " + undecided.size() + " — идут сразу после пула");
         }
         if (queue.isEmpty()) {
             out.ms = System.currentTimeMillis() - started;
             return out;
         }
+
+        // Пул чистим только здесь — когда очередь собрана и прогон действительно начнётся.
+        // Так отмена «на входе» не оставит человека без рабочих конфигов.
+        if (out.poolFirst > 0) Pool.clear(c);
 
         // 5) партии в одном ядре
         final int size = Prefs.batchSize(c);
@@ -216,9 +230,33 @@ public final class PoolScan {
                 }
                 cnt[1]++;
                 if (r.ok) {
+                    // В рабочие — ТОЛЬКО измеренная скорость: файл реально скачался
+                    // (минимум Probe.MIN_SAMPLE_BYTES) и прошёл порог из настроек.
+                    long kbps = r.kbps;
+                    int minKbps = Prefs.minSpeedKbps(c);
+                    if (kbps <= 0 || r.bytes < Probe.MIN_SAMPLE_BYTES) {
+                        out.undecided++;
+                        Candidates.add(c, net, cfg.raw, "скорость не измерена");
+                        if (log != null) {
+                            log.line("  ~ " + cfg.name + " — файл не скачался целиком, "
+                                    + "скорость не измерена → в «нерешённые»");
+                        }
+                        continue;
+                    }
+                    if (kbps < minKbps) {
+                        out.undecided++;
+                        Candidates.add(c, net, cfg.raw, "медленнее порога: " + kbps + " КБ/с");
+                        if (log != null) {
+                            log.line("  ~ " + cfg.name + " · " + Prefs.speedText(kbps)
+                                    + " — медленнее порога " + Prefs.minSpeedText(c)
+                                    + " → в «нерешённые»");
+                        }
+                        continue;
+                    }
                     cnt[0]++;
                     out.ok++;
-                    long kbps = r.kbps > 0 ? r.kbps : Prefs.minSpeedKbps(c);
+                    String key = ConfigRepository.canonicalKey(cfg.raw);
+                    if (key != null && poolKeys.contains(key)) out.poolBack++;
                     Pool.remember(c, cfg.raw, kbps, r.ms, "");
                     Blacklist.forget(c, cfg.raw);
                     Candidates.remove(c, net, cfg.raw);
@@ -269,11 +307,18 @@ public final class PoolScan {
                 if (ConfigRepository.isCancelled()) break;
                 ProxyConfig cfg = relay.get(i);
                 Probe.Result r = Probe.measureConfig(c, cfg, Prefs.gateTimeoutMs(c));
-                if (r.ok && r.kbps > 0) {
+                int minKbps = Prefs.minSpeedKbps(c);
+                if (r.ok && r.kbps > 0 && r.kbps >= minKbps) {
                     out.ok++;
+                    String key = ConfigRepository.canonicalKey(cfg.raw);
+                    if (key != null && poolKeys.contains(key)) out.poolBack++;
                     Pool.remember(c, cfg.raw, r.kbps, cfg.latency, "");
                     Blacklist.forget(c, cfg.raw);
                     Candidates.remove(c, net, cfg.raw);
+                } else if (r.ok && r.kbps > 0) {
+                    // Файл скачался, но медленнее порога — не приговор, а «перезже».
+                    out.undecided++;
+                    Candidates.add(c, net, cfg.raw, "медленнее порога: " + r.kbps + " КБ/с");
                 } else if (r.hard) {
                     out.hard++;
                     Blacklist.add(c, net, cfg, r.reason);

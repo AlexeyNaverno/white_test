@@ -1,0 +1,6 @@
+• Working configs are re-checked first during a build: they are moved to the head of the queue and removed from the pool, and only those that re-confirm their speed go back. Fail — out, no dead ballast in the working list.
+• "Connect" now makes exactly one attempt in the variant the config was saved with (directly or with the same DPI bypass strategy), with no extra "let's try the other way". If it doesn't come up, it goes to the blacklist.
+• Only configs with a genuinely measured speed enter the working list: the file must actually download (at least 8 KB), otherwise the config goes to "undecided" instead.
+• Speed is now measured by downloading a search engine HTML page (DuckDuckGo no-JS, Google as backup) instead of a GitHub file, which itself was sometimes unavailable and made live configs look dead.
+• The store is filled up to 50,000 configs from ALL sources, with blacklist and duplicate filtering happening during the pool build; dead providers are pruned before the TCP probe.
+• Sources are re-downloaded only when the author changed them (ETag/Last-Modified): a "not modified" reply reuses the saved copy, saving traffic.
