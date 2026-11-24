@@ -111,6 +111,9 @@ public final class FastPing {
 
         final int threads = Math.min(Prefs.fastPingThreads(c), Math.max(1, endpoints.size()));
         final int timeout = Prefs.fastPingTimeoutMs(c);
+        // С 0.1.21 прогресс пишется десятью шагами, а не каждые 50 серверов: при 8000
+        // серверах прежний лог забивал консоль сотнями строк.
+        final int progressStep = Math.max(1, endpoints.size() / 10);
         final AtomicInteger cursor = new AtomicInteger();
         final AtomicInteger checked = new AtomicInteger();
         final java.util.Set<String> aliveEndpoints =
@@ -140,7 +143,7 @@ public final class FastPing {
                             aliveEndpoints.add(key);
                         }
                         int done = checked.incrementAndGet();
-                        if (log != null && (done % 50 == 0 || done == endpoints.size())) {
+                        if (log != null && (done % progressStep == 0 || done == endpoints.size())) {
                             log.line("  быстрый отсев " + done + "/" + endpoints.size()
                                     + " серверов → живых " + aliveEndpoints.size());
                         }

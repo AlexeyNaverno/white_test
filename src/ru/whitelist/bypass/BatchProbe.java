@@ -41,6 +41,12 @@ public final class BatchProbe {
     public static final int SAMPLE_BYTES = 64 * 1024;
     /** Больше сотни одновременных проб не имеет смысла: упираемся в сеть и в TLS. */
     public static final int MAX_BATCH = 100;
+    /**
+     * Сколько партий ПОДРЯД не поднялось вовсе. Если ядро сыпется системно (битый бинарник,
+     * нехватка памяти), не выносим приговоров и не дробим партии до бесконечности: три
+     * провала подряд — «проверю позже», а не «в чёрный список».
+     */
+    private static volatile int topLevelFailures = 0;
 
     public interface Log {
         void line(String message);
@@ -58,17 +64,39 @@ public final class BatchProbe {
         public final long bytes;
         /** Связность была, а данных нет (204/пустое тело) — это приговор, а не «не успели». */
         public final boolean hard;
+        /**
+         * Ядро не принимает сам конфиг (ломает конфигурацию партии) — 0.1.21. Такой
+         * вердикт относится к строке, а не к провайдеру: в статистику кластеров он не идёт.
+         */
+        public final boolean configBroken;
+        /**
+         * «Партия с этим конфигом не поднялась, но ядро в этом прогоне ещё ни разу не
+         * работало» — вину не доказали. Если позже ядро оживёт, вердикт станет приговором.
+         */
+        public final boolean suspect;
         /** Причина для журнала. */
         public final String reason;
 
         Result(ProxyConfig cfg, boolean ok, long kbps, long ms, long bytes,
                boolean hard, String reason) {
+            this(cfg, ok, kbps, ms, bytes, hard, reason, false);
+        }
+
+        Result(ProxyConfig cfg, boolean ok, long kbps, long ms, long bytes,
+               boolean hard, String reason, boolean configBroken) {
+            this(cfg, ok, kbps, ms, bytes, hard, reason, configBroken, false);
+        }
+
+        Result(ProxyConfig cfg, boolean ok, long kbps, long ms, long bytes,
+               boolean hard, String reason, boolean configBroken, boolean suspect) {
             this.cfg = cfg;
             this.ok = ok;
             this.kbps = kbps;
             this.ms = ms;
             this.bytes = bytes;
             this.hard = hard;
+            this.configBroken = configBroken;
+            this.suspect = suspect;
             this.reason = reason == null ? "" : reason;
         }
 
@@ -127,69 +155,136 @@ public final class BatchProbe {
                 if (batch.size() >= MAX_BATCH) break;
             }
         }
-        List<Result> results = new ArrayList<>();
-        if (batch.isEmpty()) return new Outcome(results, 0, 0, false);
+        if (batch.isEmpty()) return new Outcome(new ArrayList<Result>(), 0, 0, false);
 
         // Конфиги без TLS с ретранслятором в батч не встают: у них своя линия на
         // dokodemo-door. Вызывающий их отфильтровывает (Probe.usable), но страхуемся.
         List<ProxyConfig> work = new ArrayList<>();
+        List<Result> skipped = new ArrayList<>();
         for (ProxyConfig cfg : batch) {
             if (XrayEngine.needsRelay(cfg)) {
-                results.add(new Result(cfg, false, -1, -1, 0, false,
+                skipped.add(new Result(cfg, false, -1, -1, 0, false,
                         "нужен ретранслятор — проверяется отдельно"));
-            } else {
-                work.add(cfg);
+                continue;
             }
-        }
-        if (work.isEmpty()) {
-            return new Outcome(results, 0, System.currentTimeMillis() - started, false);
+            // Личный приговор до старта партии: строка, на которой падает сбор JSON,
+            // раньше валила всю партию (в логе — «портов открылось 0 за 18 мс»).
+            String problem = XrayEngine.outboundProblem(cfg);
+            if (problem != null) {
+                skipped.add(new Result(cfg, false, -1, -1, 0, true,
+                        "ядро не принимает этот конфиг: " + problem, true));
+                continue;
+            }
+            work.add(cfg);
         }
 
-        int basePort = freeRange(work.size());
+        State state = new State();
+        List<Result> workResults = work.isEmpty()
+                ? new ArrayList<Result>()
+                : probeGroup(c, work, log, state, 0);
+
+        // Второй проход по «подозрительным»: пока ни одна группа не поднялась, мы не
+        // знали, виноват конфиг или ядро. Если под конец прогона ядро всё-таки
+        // заработало, значит конфиг действительно его ломал — выносим приговор.
+        if (state.anySuccess) {
+            for (int i = 0; i < workResults.size(); i++) {
+                Result r = workResults.get(i);
+                if (r.suspect) {
+                    workResults.set(i, new Result(r.cfg, false, -1, -1, 0, true,
+                            "ядро не принимает этот конфиг", true));
+                }
+            }
+        }
+
+        // Вердикт — каждому конфигу партии, в порядке партии.
+        List<Result> ordered = new ArrayList<>();
+        for (ProxyConfig cfg : batch) {
+            Result found = null;
+            for (Result r : skipped) {
+                if (r.cfg == cfg) { found = r; break; }
+            }
+            if (found == null) {
+                for (Result r : workResults) {
+                    if (r.cfg == cfg) { found = r; break; }
+                }
+            }
+            if (found == null) {
+                found = new Result(cfg, false, -1, -1, 0, false, "нет вердикта");
+            }
+            ordered.add(found);
+        }
+        return new Outcome(ordered, state.opened, System.currentTimeMillis() - started,
+                ConfigRepository.isCancelled());
+    }
+
+    /**
+     * Состояние одного прогона (партии): сколько портов открылось и было ли ХОТЬ ОДНО
+     * удачное ядро. Второе нужно, чтобы отличить «этот конфиг ломает ядро» от «ядро
+     * сломано целиком»: приговор одному конфигу выносим, только если другие группы
+     * в том же прогоне поднимались.
+     */
+    private static final class State {
+        int opened;
+        boolean anySuccess;
+    }
+
+    /**
+     * Проба одной группы в одном ядре.
+     *
+     * Если ядро не поднялось вовсе (группа открыла 0 портов), группа делится пополам и
+     * проверяется заново: с 0.1.21 один «отравленный» конфиг больше не топит остальные
+     * девяносто девять (в 0.1.20 такая партия целиком уходила в «нерешённые» — именно
+     * оттуда в журнале были тысячи «нерешённых» и сотни ложно мёртвых кластеров).
+     */
+    private static List<Result> probeGroup(Context c, List<ProxyConfig> group, Log log,
+                                           State st, int depth) {
+        List<Result> out = new ArrayList<>();
+        if (group.isEmpty()) return out;
+        if (ConfigRepository.isCancelled()) {
+            for (ProxyConfig cfg : group) {
+                out.add(new Result(cfg, false, -1, -1, 0, false, "проверка остановлена"));
+            }
+            return out;
+        }
+
+        int basePort = freeRange(group.size());
         if (basePort <= 0) {
-            for (ProxyConfig cfg : work) {
-                results.add(new Result(cfg, false, -1, -1, 0, false, "нет свободных портов"));
+            // Локальная проблема, а не вина конфигов: приговор не выносим.
+            for (ProxyConfig cfg : group) {
+                out.add(new Result(cfg, false, -1, -1, 0, false,
+                        "не нашёлся свободный диапазон портов"));
             }
-            return new Outcome(results, 0, System.currentTimeMillis() - started, false);
+            return out;
         }
-
         String json;
         try {
-            json = XrayEngine.buildBatchConfigJson(work, basePort,
-                    Prefs.allowNoTls(c), Prefs.vpnDns(c));
+            json = XrayEngine.buildBatchConfigJson(group, basePort, false, Prefs.vpnDns(c));
         } catch (Throwable t) {
-            for (ProxyConfig cfg : work) {
-                results.add(new Result(cfg, false, -1, -1, 0, false,
-                        "партия не собралась: " + t.getMessage()));
-            }
-            return new Outcome(results, 0, System.currentTimeMillis() - started, false);
+            return broken(c, group, log, st, depth,
+                    "конфигурация партии не собралась: " + t.getMessage());
         }
 
         libv2ray.CoreController controller = null;
-        List<Result> workResults = new ArrayList<>();
-        int openedPorts = 0;
         try {
             controller = XrayEngine.startInstance(c, json);
-            // Ждём порты все сразу: у одной партии общий срок, а не срок на конфиг.
-            long waitMs = Probe.SOCKS_WAIT_MS + Math.min(4000L, work.size() * 20L);
-            int ready = waitPorts(basePort, work.size(), waitMs);
-            openedPorts = ready;
-            if (log != null) {
-                log.line("  ядро открыло " + ready + " из " + work.size() + " портов");
-            }
+            long waitMs = Probe.SOCKS_WAIT_MS + Math.min(4000L, group.size() * 20L);
+            int ready = waitPorts(basePort, group.size(), waitMs);
             if (ready == 0) {
-                for (ProxyConfig cfg : work) {
-                    results.add(new Result(cfg, false, -1, -1, 0, false,
-                            "ядро не открыло SOCKS"));
-                }
-                return new Outcome(results, 0, System.currentTimeMillis() - started,
-                        ConfigRepository.isCancelled());
+                return broken(c, group, log, st, depth, "ядро не подняло партию");
+            }
+            topLevelFailures = 0;              // ядро работает — счётчик провалов сброшен
+            st.anySuccess = true;
+            st.opened += ready;
+            if (log != null && group.size() > 1) {
+                log.line("  ядро открыло " + ready + " из " + group.size() + " портов");
             }
 
-            final int threads = Math.min(Prefs.batchThreads(c), work.size());
+            final int basePortRef = basePort;
+            final List<ProxyConfig> groupRef = group;
+            final int threads = Math.min(Prefs.batchThreads(c), group.size());
             final List<String> urls = Prefs.speedUrls(c);
             final int timeout = Prefs.gateTimeoutMs(c);
-            final Result[] slot = new Result[work.size()];
+            final Result[] slot = new Result[group.size()];
             final AtomicInteger cursor = new AtomicInteger();
             final AtomicInteger done = new AtomicInteger();
             ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, threads));
@@ -200,8 +295,8 @@ public final class BatchProbe {
                             if (ConfigRepository.isCancelled()) return;
                             int idx = cursor.getAndIncrement();
                             if (idx >= slot.length) return;
-                            slot[idx] = measureOne(urls, "127.0.0.1", basePort + idx,
-                                    timeout, work.get(idx));
+                            slot[idx] = measureOne(urls, "127.0.0.1", basePortRef + idx,
+                                    timeout, groupRef.get(idx));
                             int n = done.incrementAndGet();
                             if (log != null && (n % 25 == 0 || n == slot.length)) {
                                 int ok = 0;
@@ -215,7 +310,7 @@ public final class BatchProbe {
             pool.shutdown();
             try {
                 // Срок с запасом: раундов × окно замера + холодный старт ядра.
-                long hard = (long) Math.ceil(work.size() / (double) Math.max(1, threads))
+                long hard = (long) Math.ceil(group.size() / (double) Math.max(1, threads))
                         * (timeout + 4000L);
                 pool.awaitTermination(hard + 10_000L, TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
@@ -224,44 +319,64 @@ public final class BatchProbe {
             for (int i = 0; i < slot.length; i++) {
                 Result r = slot[i];
                 if (r == null) {
-                    r = new Result(work.get(i), false, -1, -1, 0, false, "не успели проверить");
+                    r = new Result(group.get(i), false, -1, -1, 0, false, "не успели проверить");
                 }
-                workResults.add(r);
+                out.add(r);
             }
+            return out;
         } catch (Throwable t) {
-            for (ProxyConfig cfg : work) {
-                results.add(new Result(cfg, false, -1, -1, 0, false,
-                        "ядро партии упало: " + t.getMessage()));
-            }
-            return new Outcome(results, 0, System.currentTimeMillis() - started,
-                    ConfigRepository.isCancelled());
+            String message = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+            return broken(c, group, log, st, depth, "ядро партии упало: " + message);
         } finally {
             XrayEngine.stopInstance(controller);
         }
+    }
 
-        // Порядок результатов — порядок переданных конфигов.
-        results.addAll(workResults);
-        List<Result> ordered = new ArrayList<>();
-        for (ProxyConfig cfg : batch) {
-            for (Result r : results) {
-                if (r.cfg == cfg) {
-                    ordered.add(r);
-                    break;
-                }
+    /**
+     * Группа не встала. Делим пополам, пока не дойдём до одного конфига: он и есть
+     * виновник (его и отправляем в чёрный список).
+     *
+     * Если же ядро не поднимается СИСТЕМНО (три партии подряд), виновато не содержимое
+     * списка — тогда приговоров не выносим и дробление прекращаем: конфиги получают
+     * «проверю позже» и вернутся в следующем прогоне первыми.
+     */
+    private static List<Result> broken(Context c, List<ProxyConfig> group, Log log, State st,
+                                       int depth, String reason) {
+        List<Result> out = new ArrayList<>();
+        if (depth == 0) topLevelFailures++;
+        if (topLevelFailures >= 3) {
+            for (ProxyConfig cfg : group) {
+                out.add(new Result(cfg, false, -1, -1, 0, false,
+                        "ядро не поднимается (" + reason + ") — проверю позже"));
             }
+            return out;
         }
-        if (ordered.size() != batch.size()) {
-            // На всякий случай: у каждого конфига должен быть вердикт.
-            for (ProxyConfig cfg : batch) {
-                boolean found = false;
-                for (Result r : ordered) if (r.cfg == cfg) { found = true; break; }
-                if (!found) {
-                    ordered.add(new Result(cfg, false, -1, -1, 0, false, "нет вердикта"));
-                }
+        // Приговор строке выносим, только если ядро в этом прогоне хоть раз поднялось:
+        // иначе виновато ядро, и «этот конфиг его ломает» было бы неправдой.
+        boolean blame = st.anySuccess;
+        if (group.size() == 1) {
+            out.add(new Result(group.get(0), false, -1, -1, 0, blame,
+                    blame ? "ядро не принимает этот конфиг: " + reason
+                          : "ядро не поднимается (" + reason + ") — проверю позже",
+                    blame, !blame));
+            return out;
+        }
+        if (depth >= 8) {
+            for (ProxyConfig cfg : group) {
+                out.add(new Result(cfg, false, -1, -1, 0, blame,
+                        "ядро не принимает партию: " + reason, blame, !blame));
             }
+            return out;
         }
-        return new Outcome(ordered, openedPorts, System.currentTimeMillis() - started,
-                ConfigRepository.isCancelled());
+        if (log != null) {
+            log.line("  группа " + group.size() + " не встала (" + reason
+                    + ") — делю пополам и ищу виновника");
+        }
+        int mid = group.size() / 2;
+        out.addAll(probeGroup(c, new ArrayList<>(group.subList(0, mid)), log, st, depth + 1));
+        out.addAll(probeGroup(c, new ArrayList<>(group.subList(mid, group.size())), log, st,
+                depth + 1));
+        return out;
     }
 
     /**

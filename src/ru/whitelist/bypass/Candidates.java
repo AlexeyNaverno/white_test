@@ -4,7 +4,11 @@ import android.content.Context;
 import android.content.SharedPreferences;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * «Проверявшиеся без вердикта» — третий список рядом с пулом и чёрным списком.
@@ -102,6 +106,76 @@ public final class Candidates {
             sb.append(l);
         }
         prefs(c).edit().putString(field(net), sb.toString()).apply();
+    }
+
+    /**
+     * Массовая запись «нерешённых» — ОДНИМ обращением к хранилищу (0.1.21).
+     *
+     * Зачем: в партии из 100 конфигов вердикта без приговора может не быть у десятков,
+     * а прежний {@link #add} на каждую строку перечитывал и перезаписывал весь список —
+     * на тысячах строк это давало квадратичное время и тормозило сбор.
+     *
+     * @param raws    строки конфигов
+     * @param reasons причины в том же порядке (может быть null — тогда пустые)
+     */
+    public static synchronized void addAll(Context c, String net, List<String> raws,
+                                           List<String> reasons) {
+        if (raws == null || raws.isEmpty()) return;
+        List<Entry> list = all(c, net);
+        Map<String, Integer> seen = new LinkedHashMap<>();
+        List<String> lines = new ArrayList<>();
+        for (Entry e : list) {
+            seen.put(e.raw, lines.size());
+            lines.add(e.at + "\t" + (e.reason == null ? "" : e.reason) + "\t" + e.raw);
+        }
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < raws.size(); i++) {
+            String raw = raws.get(i);
+            if (raw == null || raw.trim().isEmpty()) continue;
+            String clean = raw.replace('\n', ' ').replace('\r', ' ').trim();
+            String reason = reasons != null && i < reasons.size() && reasons.get(i) != null
+                    ? reasons.get(i).replace('\t', ' ') : "";
+            String line = now + "\t" + reason + "\t" + clean;
+            Integer at = seen.get(clean);
+            if (at != null) lines.set(at, line);
+            else {
+                seen.put(clean, lines.size());
+                lines.add(line);
+            }
+        }
+        if (lines.size() > MAX_ENTRIES) {
+            lines = new ArrayList<>(lines.subList(lines.size() - MAX_ENTRIES, lines.size()));
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String l : lines) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(l);
+        }
+        prefs(c).edit().putString(field(net), sb.toString()).apply();
+    }
+
+    /** Массово убрать строки (получили вердикт) — тоже одним обращением. */
+    public static synchronized void removeAll(Context c, String net, List<String> raws) {
+        if (raws == null || raws.isEmpty()) return;
+        List<Entry> list = all(c, net);
+        if (list.isEmpty()) return;
+        Set<String> drop = new HashSet<>();
+        for (String raw : raws) {
+            if (raw != null && !raw.trim().isEmpty()) drop.add(raw.trim());
+        }
+        if (drop.isEmpty()) return;
+        StringBuilder sb = new StringBuilder();
+        boolean changed = false;
+        for (Entry e : list) {
+            if (drop.contains(e.raw)) {
+                changed = true;
+                continue;
+            }
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(e.at).append('\t').append(e.reason == null ? "" : e.reason)
+              .append('\t').append(e.raw);
+        }
+        if (changed) prefs(c).edit().putString(field(net), sb.toString()).apply();
     }
 
     /** Убрать строку из «нерешённых» текущей сети. */

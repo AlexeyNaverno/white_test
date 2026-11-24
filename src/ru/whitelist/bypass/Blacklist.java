@@ -27,6 +27,9 @@ import java.util.Set;
  * Правила:
  *  - в список попадает только «жёсткий» отказ (ядро/данные/нет скорости), но не
  *    «ниже порога»: медленный конфиг рабочий, просто медленный;
+ *  - с 0.1.21 сюда же идут конфиги, у которых не открылся TCP-порт (FastPing), но в
+ *    отдельном ведре и на сутки, а не на неделю (см. {@link #PING_TTL_MS}): таких
+ *    записей тысячи, и сеть могла просто моргнуть;
  *  - запись живёт {@link #TTL_MS} — через неделю конфиг перепроверяется: сервер мог
  *    ожить, а провайдер — перестать блокировать;
  *  - как только конфиг снова прошёл замер, запись снимается;
@@ -41,9 +44,19 @@ public final class Blacklist {
     private static final String KEY_LEGACY = "entries";
     private static final String KEY_WIFI = "entries_wifi";
     private static final String KEY_LTE = "entries_lte";
+    private static final String KEY_PING_WIFI = "ping_wifi";
+    private static final String KEY_PING_LTE = "ping_lte";
 
     /** Сколько запись считается приговором. Неделя: за это время многое меняется. */
     public static final long TTL_MS = 7L * 24 * 60 * 60 * 1000;
+    /**
+     * Отдельное ведро для «TCP-порт не открылся» (0.1.21).
+     *
+     * Зачем отдельно и с коротким сроком: таких записей тысячи за один прогон, и это
+     * самый «шаткий» приговор — сеть могла моргнуть, провайдер мог резать всё подряд
+     * пять минут. Сутки — и такой конфиг снова проверяется, а не висит неделю.
+     */
+    public static final long PING_TTL_MS = 24L * 60 * 60 * 1000;
     /** Потолок на сеть, чтобы файл не рос бесконечно. */
     private static final int MAX = 20000;
 
@@ -71,8 +84,8 @@ public final class Blacklist {
      * через {@link #filter(Context, String, java.util.List)}.
      */
     public static Set<String> keysBoth(Context c) {
-        Set<String> out = new LinkedHashSet<>(load(c, Net.WIFI).keySet());
-        out.retainAll(load(c, Net.MOBILE).keySet());
+        Set<String> out = new LinkedHashSet<>(loadAll(c, Net.WIFI).keySet());
+        out.retainAll(loadAll(c, Net.MOBILE).keySet());
         return out;
     }
 
@@ -96,11 +109,31 @@ public final class Blacklist {
 
     /** Живые записи указанной сети: ключ → время, когда конфиг признали нерабочим. */
     private static Map<String, Long> load(Context c, String net) {
+        return read(c, keyFor(net), TTL_MS);
+    }
+
+    /** То же для ведра «TCP не открылся» — срок короче (сутки). */
+    private static Map<String, Long> loadPing(Context c, String net) {
+        return read(c, pingKeyFor(net), PING_TTL_MS);
+    }
+
+    /** Основное ведро + ведро провалов TCP: для отсева оба одинаково «приговор». */
+    private static Map<String, Long> loadAll(Context c, String net) {
+        Map<String, Long> out = new LinkedHashMap<>(load(c, net));
+        out.putAll(loadPing(c, net));
+        return out;
+    }
+
+    private static String pingKeyFor(String net) {
+        return Net.WIFI.equals(Net.normalize(net)) ? KEY_PING_WIFI : KEY_PING_LTE;
+    }
+
+    private static Map<String, Long> read(Context c, String key, long ttl) {
         migrateLegacy(c);
         SharedPreferences p = prefs(c);
         Map<String, Long> out = new LinkedHashMap<>();
         long now = System.currentTimeMillis();
-        String data = p.getString(keyFor(net), "");
+        String data = p.getString(key, "");
         if (data == null || data.isEmpty()) return out;
         for (String line : data.split("\n")) {
             if (line.isEmpty()) continue;
@@ -112,7 +145,7 @@ public final class Blacklist {
             } catch (NumberFormatException e) {
                 continue;
             }
-            if (now - at > TTL_MS) continue;   // пора перепроверить
+            if (now - at > ttl) continue;   // пора перепроверить
             String entry = line.substring(tab + 1).trim();
             if (!entry.isEmpty()) out.put(entry, at);
         }
@@ -120,13 +153,45 @@ public final class Blacklist {
     }
 
     private static void store(Context c, String net, Map<String, Long> entries) {
+        write(c, keyFor(net), entries);
+    }
+
+    private static void write(Context c, String key, Map<String, Long> entries) {
         StringBuilder sb = new StringBuilder();
         int n = 0;
         for (Map.Entry<String, Long> e : entries.entrySet()) {
             if (n++ >= MAX) break;
             sb.append(e.getValue()).append('\t').append(e.getKey()).append('\n');
         }
-        prefs(c).edit().putString(keyFor(net), sb.toString()).apply();
+        prefs(c).edit().putString(key, sb.toString()).apply();
+    }
+
+    /**
+     * Массово записать «TCP-порт не открылся» — одним обращением к хранилищу (0.1.21).
+     * Таких записей за прогон бывают тысячи, и поштучная запись была бы квадратичной.
+     */
+    public static synchronized void addPingFail(Context c, String net, java.util.List<String> raws) {
+        if (raws == null || raws.isEmpty()) return;
+        Map<String, Long> entries = loadPing(c, net);
+        long now = System.currentTimeMillis();
+        for (String raw : raws) {
+            String key = keyOf(raw);
+            if (key == null) continue;
+            entries.remove(key);
+            entries.put(key, now);
+        }
+        // Свежие записи важнее старых: при переполнении отрезаем начало.
+        if (entries.size() > MAX) {
+            Map<String, Long> trimmed = new LinkedHashMap<>();
+            int skip = entries.size() - MAX;
+            int i = 0;
+            for (Map.Entry<String, Long> e : entries.entrySet()) {
+                if (i++ < skip) continue;
+                trimmed.put(e.getKey(), e.getValue());
+            }
+            entries = trimmed;
+        }
+        write(c, pingKeyFor(net), entries);
     }
 
     // ------------------------------------------------------------------ запись
@@ -154,6 +219,30 @@ public final class Blacklist {
         if (cfg != null) add(c, net, cfg.raw, reason);
     }
 
+    /** Массово записать приговоры — одним обращением к хранилищу (0.1.21). */
+    public static synchronized void addAll(Context c, String net, java.util.List<String> raws) {
+        if (raws == null || raws.isEmpty()) return;
+        Map<String, Long> entries = load(c, net);
+        long now = System.currentTimeMillis();
+        for (String raw : raws) {
+            String key = keyOf(raw);
+            if (key == null) continue;
+            entries.remove(key);
+            entries.put(key, now);
+        }
+        if (entries.size() > MAX) {
+            Map<String, Long> trimmed = new LinkedHashMap<>();
+            int skip = entries.size() - MAX;
+            int i = 0;
+            for (Map.Entry<String, Long> e : entries.entrySet()) {
+                if (i++ < skip) continue;
+                trimmed.put(e.getKey(), e.getValue());
+            }
+            entries = trimmed;
+        }
+        store(c, net, entries);
+    }
+
     /** Забыть конфиг (он снова заработал) в текущей сети. */
     public static void forget(Context c, String raw) {
         forget(c, Net.key(c), raw);
@@ -164,6 +253,9 @@ public final class Blacklist {
         if (key == null) return;
         Map<String, Long> entries = load(c, net);
         if (entries.remove(key) != null) store(c, net, entries);
+        // Конфиг заработал — снимаем и «пинговый» приговор, иначе он останется до суток.
+        Map<String, Long> ping = loadPing(c, net);
+        if (ping.remove(key) != null) write(c, pingKeyFor(net), ping);
     }
 
     // ------------------------------------------------------------------ чтение
@@ -174,12 +266,12 @@ public final class Blacklist {
     }
 
     public static Set<String> keys(Context c, String net) {
-        return new LinkedHashSet<>(load(c, net).keySet());
+        return new LinkedHashSet<>(loadAll(c, net).keySet());
     }
 
     public static boolean contains(Context c, ProxyConfig cfg) {
         String key = cfg == null ? null : keyOf(cfg.raw);
-        return key != null && load(c, Net.key(c)).containsKey(key);
+        return key != null && loadAll(c, Net.key(c)).containsKey(key);
     }
 
     public static int size(Context c) {
@@ -187,7 +279,7 @@ public final class Blacklist {
     }
 
     public static int size(Context c, String net) {
-        return load(c, net).size();
+        return loadAll(c, net).size();
     }
 
     /** Убрать из списка кандидатов всё, что уже признано нерабочим (текущая сеть). */
@@ -218,21 +310,25 @@ public final class Blacklist {
     }
 
     public static synchronized void clear(Context c, String net) {
-        prefs(c).edit().remove(keyFor(net)).apply();
+        prefs(c).edit().remove(keyFor(net)).remove(pingKeyFor(net)).apply();
     }
 
     /** Очистить оба списка сразу — то, что делает кнопка в настройках. */
     public static synchronized void clearAll(Context c) {
-        prefs(c).edit().remove(KEY_WIFI).remove(KEY_LTE).remove(KEY_LEGACY).apply();
+        prefs(c).edit().remove(KEY_WIFI).remove(KEY_LTE).remove(KEY_LEGACY)
+                .remove(KEY_PING_WIFI).remove(KEY_PING_LTE).apply();
     }
 
     /** Сколько записей всего по обеим сетям. */
     public static int sizeAll(Context c) {
-        return load(c, Net.WIFI).size() + load(c, Net.MOBILE).size();
+        return loadAll(c, Net.WIFI).size() + loadAll(c, Net.MOBILE).size();
     }
 
     /** «Wi-Fi 12 · мобильный 30» — для строки в настройках. */
     public static String summary(Context c) {
-        return "Wi-Fi " + load(c, Net.WIFI).size() + " · мобильный " + load(c, Net.MOBILE).size();
+        return "Wi-Fi " + loadAll(c, Net.WIFI).size()
+                + " (из них TCP не открылся: " + loadPing(c, Net.WIFI).size() + ")"
+                + " · мобильный " + loadAll(c, Net.MOBILE).size()
+                + " (из них TCP не открылся: " + loadPing(c, Net.MOBILE).size() + ")";
     }
 }
