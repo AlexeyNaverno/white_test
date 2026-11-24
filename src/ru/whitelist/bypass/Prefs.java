@@ -241,6 +241,17 @@ public final class Prefs {
             "https://connectivitycheck.gstatic.com/generate_204"
     };
 
+    /**
+     * Адреса замера из 0.1.15–0.1.19 (по одному на регион). Нужны только для миграции:
+     * если у человека в настройках стоит ровно такой адрес, он его не выбирал руками,
+     * значит его можно заменить на HTML-страницу.
+     */
+    public static final String[] OLD_REGION_SPEED_URLS = {
+            "https://www.lenovo.co.jp/",
+            "https://raw.githubusercontent.com/luxxuria/harvester/main/ping_tested.txt",
+            "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni-local/vless.txt"
+    };
+
     /** Несколько резервных DNS: первый — основной, остальные — на случай перехвата. */
     public static final String DEFAULT_DNS = "1.1.1.1, 8.8.8.8, 9.9.9.9";
 
@@ -283,11 +294,14 @@ public final class Prefs {
         return kbit + " кбит/с (" + Math.max(1, Math.round(kbit / 8f)) + " КБ/с)";
     }
 
-    /** Ссылки замера скорости. С 0.1.15 по умолчанию ровно одна — из целевого региона. */
+    /**
+     * Ссылки замера скорости. С 0.1.20 по умолчанию — HTML-страница поисковика и запасная
+     * главная Google (см. {@link Regions#SPEED_HTML}): тело у них всегда есть, и оно большое.
+     */
     public static List<String> speedUrls(Context c) {
-        String raw = get(c).getString(SPEED_URLS, Regions.speedUrl(region(c)));
+        String raw = get(c).getString(SPEED_URLS, Regions.speedUrlsDefault());
         List<String> out = lines(raw);
-        if (out.isEmpty()) out.add(Regions.speedUrl(region(c)));
+        if (out.isEmpty()) out.addAll(lines(Regions.speedUrlsDefault()));
         return out;
     }
 
@@ -303,7 +317,9 @@ public final class Prefs {
 
     public static List<String> sources(Context c) {
         String joined = get(c).getString(SOURCES, null);
-        if (joined == null) joined = join(DEFAULT_SOURCES);
+        // С 0.1.20 по умолчанию ВСЕ источники: потолок хранилища вырос до 50 000, и
+        // «лишние» списки больше не мешают — они просто расширяют корпус кандидатов.
+        if (joined == null) joined = join(FULL_SOURCES);
         return lines(joined);
     }
 
@@ -333,9 +349,13 @@ public final class Prefs {
 
     // --- размер хранилища конфигов ---
 
-    /** Потолок строк в хранилище по умолчанию: 1200 хватает с запасом. */
-    public static final int DEFAULT_MAX_CONFIGS = 1200;
-    public static final int MAX_CONFIGS_CAP = 3000;
+    /**
+     * Потолок строк в хранилище. С 0.1.20 — 50 000: сбор идёт партиями по 100 в одном ядре,
+     * поэтому большой корпус не стоит дорого, а редкие рабочие конфиги в нём всё-таки есть.
+     * Отсев (чёрный список, дубликаты) делается уже на сборке пула, а не при скачивании.
+     */
+    public static final int DEFAULT_MAX_CONFIGS = 50000;
+    public static final int MAX_CONFIGS_CAP = 50000;
 
     /**
      * Сколько конфигов держать скачанными. Меньше строк — быстрее круг проверок:
@@ -491,7 +511,7 @@ public final class Prefs {
         get(c).edit()
                 .putString(REGION, v)
                 .putString(PING_TARGETS, Regions.pingTarget(v))
-                .putString(SPEED_URLS, Regions.speedUrl(v))
+                .putString(SPEED_URLS, Regions.speedUrlsDefault())
                 .putString(HEALTH_URLS, Regions.healthUrl(v))
                 .apply();
     }
@@ -745,6 +765,60 @@ public final class Prefs {
         migrateToStandardPreset(c);
         migrateFasterDefaults(c);
         migrateRegion(c);
+        migrateSpeedToHtml(c);
+        migrateAllSources(c);
+        migrateBigStorage(c);
+    }
+
+    /**
+     * 0.1.20: замер переехал с файла GitHub на HTML-страницу поисковика.
+     *
+     * У кого в настройках остались СТАРЫЕ адреса по умолчанию (файл списка с GitHub,
+     * generate_204), подставляем страницу поисковика: файл сам бывает недоступен, и живой
+     * конфиг из-за него выглядел мёртвым. Свои адреса не трогаем.
+     */
+    private static void migrateSpeedToHtml(Context c) {
+        SharedPreferences p = get(c);
+        if (p.getBoolean("migrated_speed_html_v1", false)) return;
+        SharedPreferences.Editor e = p.edit();
+        String speed = p.getString(SPEED_URLS, null);
+        List<String> linesNow = lines(speed);
+        if (speed == null || linesNow.isEmpty() || sameLines(linesNow, DEFAULT_SPEED_URLS)
+                || sameLines(linesNow, OLD_REGION_SPEED_URLS)) {
+            e.putString(SPEED_URLS, Regions.speedUrlsDefault());
+        }
+        String health = p.getString(HEALTH_URLS, null);
+        List<String> healthNow = lines(health);
+        if (health == null || healthNow.isEmpty() || sameLines(healthNow, DEFAULT_HEALTH_URLS)
+                || sameLines(healthNow, OLD_REGION_SPEED_URLS)) {
+            e.putString(HEALTH_URLS, Regions.healthUrl(Regions.DEFAULT));
+        }
+        e.putBoolean("migrated_speed_html_v1", true);
+        e.apply();
+    }
+
+    /** 0.1.20: «забивать корпус со всех источников» — досыпаем недостающие из FULL_SOURCES. */
+    private static void migrateAllSources(Context c) {
+        SharedPreferences p = get(c);
+        if (p.getBoolean("migrated_sources_v1", false)) return;
+        List<String> current = lines(p.getString(SOURCES, null));
+        List<String> out = new ArrayList<>(current);
+        for (String src : FULL_SOURCES) {
+            if (!out.contains(src)) out.add(src);
+        }
+        p.edit().putString(SOURCES, join(out.toArray(new String[0])))
+                .putBoolean("migrated_sources_v1", true).apply();
+    }
+
+    /** 0.1.20: старый потолок 1200/3000 поднимаем до 50 000 (свои меньшие значения уважаем). */
+    private static void migrateBigStorage(Context c) {
+        SharedPreferences p = get(c);
+        if (p.getBoolean("migrated_big_storage_v1", false)) return;
+        SharedPreferences.Editor e = p.edit();
+        int current = p.getInt(MAX_CONFIGS, 0);
+        if (current <= 3000) e.putInt(MAX_CONFIGS, DEFAULT_MAX_CONFIGS);
+        e.putBoolean("migrated_big_storage_v1", true);
+        e.apply();
     }
 
     /**

@@ -324,23 +324,16 @@ public class SettingsActivity extends Activity {
         label("Сколько конфигов держать в хранилище (200–" + Prefs.MAX_CONFIGS_CAP
                 + ", по умолчанию " + Prefs.DEFAULT_MAX_CONFIGS + ")", Help.MAX_CONFIGS);
         add(editMaxConfigs);
-        Button resetSources = smallButton("Вернуть источники по умолчанию");
+        // С 0.1.20 «по умолчанию» — это ВСЕ источники (12): корпус забивается до 50 000,
+        // и сокращать набор больше не нужно. Вторая кнопка «полный набор» убрана как дубль.
+        Button resetSources = smallButton("Вернуть все источники по умолчанию (12)");
         resetSources.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                editSources.setText(Prefs.join(Prefs.DEFAULT_SOURCES));
+                editSources.setText(Prefs.join(Prefs.FULL_SOURCES));
                 toast("Применится после «Сохранить»");
             }
         });
         addAction(resetSources, "Источники по умолчанию", Help.RESET_SOURCES);
-
-        Button fullSources = smallButton("Полный набор источников (12) — максимум вариантов");
-        fullSources.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                editSources.setText(Prefs.join(Prefs.FULL_SOURCES));
-                toast("Полный набор подставлен — применится после «Сохранить»");
-            }
-        });
-        addAction(fullSources, "Полный набор источников", Help.SOURCES);
 
         newPage("Обход");
 

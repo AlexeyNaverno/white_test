@@ -399,35 +399,19 @@ public class BypassVpnService extends VpnService {
                 }
                 attempt++;
                 currentConfig = cfg;
-                // Порядок повторяет то, как конфиг попал в пул. Замерен через DPI-обход —
-                // сначала пробуем РОВНО ту стратегию, что дала канал; замерен напрямую —
-                // сначала напрямую. Вторая попытка всегда одна и «другая».
-                if (!entry.dpi.isEmpty()) {
-                    sendStatus("connecting", "Попытка " + attempt + "/" + total
-                            + " через DPI-обход (как при замере): " + truncate(cfg.name, 34));
-                    up = activate(cfg, entry.dpi, myRun);
-                    if (!up) {
-                        if (aborted(myRun)) {
-                            Log.i(TAG, "подключение отменено пользователем");
-                            return;
-                        }
-                        sendStatus("connecting", "Попытка " + attempt + "/" + total
-                                + " напрямую: " + truncate(cfg.name, 34));
-                        up = activate(cfg, null, myRun);
-                    }
-                } else {
-                    sendStatus("connecting", "Попытка " + attempt + "/" + total
-                            + ": " + truncate(cfg.name, 40));
-                    up = activate(cfg, null, myRun);
-                    if (!up && aborted(myRun)) {
-                        Log.i(TAG, "подключение отменено пользователем");
-                        return;
-                    }
-                    if (!up && Prefs.desyncLine(this)) {
-                        sendStatus("connecting", "Попытка " + attempt + "/" + total
-                                + " с DPI-обходом (один раз): " + truncate(cfg.name, 30));
-                        up = activate(cfg, Prefs.dpiStrategyFor(this), myRun);
-                    }
+                // 0.1.20: РОВНО ОДНА попытка — в том варианте, в котором конфиг сохранён.
+                // Замерен через DPI-обход — поднимаем с этой стратегией; замерен напрямую —
+                // поднимаем напрямую. Никаких «а теперь попробуем иначе»: конфиг либо
+                // работает так, как записан, либо уходит в чёрный список. Это и делает
+                // пул честным: в «рабочих» лежит только то, что поднимается как записано.
+                String strategy = entry.dpi.isEmpty() ? null : entry.dpi;
+                sendStatus("connecting", "Попытка " + attempt + "/" + total
+                        + (strategy == null ? ": " : " через DPI-обход: ")
+                        + truncate(cfg.name, 34));
+                up = activate(cfg, strategy, myRun);
+                if (!up && aborted(myRun)) {
+                    Log.i(TAG, "подключение отменено пользователем");
+                    return;
                 }
                 if (up) break;
                 if (forced) {
@@ -775,7 +759,7 @@ public class BypassVpnService extends VpnService {
         });
         for (BatchProbe.Result r : ok) {
             ProxyConfig cfg = r.cfg;
-            long kbps = r.kbps > 0 ? r.kbps : Prefs.minSpeedKbps(this);
+            long kbps = r.kbps;      // BatchProbe отдаёт ok только с измеренной скоростью
             Pool.remember(this, cfg.raw, kbps, r.ms);
             Blacklist.forget(this, cfg.raw);
             Candidates.remove(this, cfg.raw);
@@ -1188,18 +1172,10 @@ public class BypassVpnService extends VpnService {
             tried++;
             switchCursor = (start + k + 1) % size;
             sendStatus("connecting", "Переключаюсь: " + truncate(cfg.name, 42) + "…");
-            boolean ok;
-            if (!entry.dpi.isEmpty()) {
-                ok = activate(cfg, entry.dpi, myRun);          // как при замере: с обходом
-                if (!ok && aborted(myRun)) return;
-                if (!ok) ok = activate(cfg, null, myRun);      // и один раз напрямую
-            } else {
-                ok = activate(cfg, null, myRun);               // как при замере: напрямую
-                if (!ok && aborted(myRun)) return;
-                if (!ok && Prefs.desyncLine(this)) {
-                    ok = activate(cfg, Prefs.dpiStrategyFor(this), myRun);
-                }
-            }
+            // 0.1.20: как и при «Подключить» — одна попытка в сохранённом варианте.
+            // Не поднялся — идём к следующему конфигу; мёртвый вылетит из пула ниже.
+            boolean ok = activate(cfg, entry.dpi.isEmpty() ? null : entry.dpi, myRun);
+            if (!ok && aborted(myRun)) return;
             if (ok) {
                 if (wasTor) {
                     // Из резервного Tor обратно на конфиг: hev смотрел в 9050 — переводим

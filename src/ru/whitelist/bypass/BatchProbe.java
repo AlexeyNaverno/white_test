@@ -28,7 +28,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  *     «ответ есть, тела нет», а полный замер делается только для финалистов.
  *
  * Время замера и «сколько скачали» остаются честными: скорость считается по фактически
- * прочитанным байтам, а не по обещанию сервера.
+ * прочитанным байтам, а не по обещанию сервера. С 0.1.20 мерится HTML-страница
+ * поисковика (см. {@link Regions#SPEED_HTML}) — популярный сайт без проверки на ботов,
+ * у которого тело есть всегда; а в рабочие попадает только конфиг, через который файл
+ * реально скачался (минимум {@link Probe#MIN_SAMPLE_BYTES}).
  */
 public final class BatchProbe {
 
@@ -269,28 +272,38 @@ public final class BatchProbe {
                                      int timeoutMs, ProxyConfig cfg) {
         String lastError = "";
         boolean emptyAnswer = false;
+        boolean gotSome = false;
         long bestMs = -1;
         long bestBytes = 0;
-        long bestKbps = -1;
-        for (int i = 0; i < urls.size() && i < 2; i++) {
+        for (int i = 0; i < urls.size() && i < 3; i++) {
             String url = urls.get(i);
             if (url == null || url.trim().isEmpty()) continue;
             NetChecker.SpeedResult r = NetChecker.downloadThroughSocks(
                     url, socksHost, port, timeoutMs, SAMPLE_BYTES);
             if (!r.error.isEmpty()) lastError = r.error;
             if (r.ok && r.bytes > 0) {
-                long kbps = r.kbps();
-                if (kbps > bestKbps) {
-                    bestKbps = kbps;
-                    bestMs = r.ms;
+                long kbps = r.kbps();     // -1, если байтов меньше Probe.MIN_SAMPLE_BYTES
+                if (r.bytes > bestBytes) {
                     bestBytes = r.bytes;
+                    bestMs = r.ms;
                 }
-                // Данные идут — это рабочий конфиг, даже если объём меньше «честного».
-                return new Result(cfg, true, kbps > 0 ? kbps : -1, r.ms, r.bytes,
-                        false, "");
+                if (kbps > 0) {
+                    // Файл реально скачался, скорость честная — только такие конфиги
+                    // годятся в рабочие (0.1.20).
+                    return new Result(cfg, true, kbps, r.ms, r.bytes, false, "");
+                }
+                // Данные были, но для честного замера их мало: пробуем следующую ссылку,
+                // а если и она не дала объёма — конфиг получит вердикт «мало данных»
+                // и вернётся в следующем прогоне («нерешённые»), а не в чёрный список.
+                gotSome = true;
+                continue;
             }
             // Ответ без тела (204) — связность есть, данных нет: жёсткий отказ.
             if (r.code >= 200 && r.code < 400 && r.bytes == 0) emptyAnswer = true;
+        }
+        if (gotSome) {
+            return new Result(cfg, false, -1, bestMs, bestBytes, false,
+                    "скачано " + Math.max(1, bestBytes / 1024) + " КБ — мало для замера");
         }
         if (emptyAnswer) {
             return new Result(cfg, false, -1, bestMs, bestBytes, true,

@@ -75,7 +75,7 @@ public final class Presets {
             p.put(Prefs.DPI_STRATEGY, Prefs.DEFAULT_STRATEGY);
             p.put(Prefs.DPI_SOURCES, Prefs.join(Prefs.DEFAULT_DPI_SOURCES));
             p.put(Prefs.DPI_TEST_URLS, Prefs.join(Prefs.DEFAULT_DPI_TEST_URLS));
-            p.put(Prefs.SOURCES, Prefs.join(Prefs.DEFAULT_SOURCES));
+            p.put(Prefs.SOURCES, Prefs.join(Prefs.FULL_SOURCES));
             p.put(Prefs.SPEED_URLS, Prefs.join(Prefs.DEFAULT_SPEED_URLS));
             p.put(Prefs.HEALTH_URLS, Prefs.join(Prefs.DEFAULT_HEALTH_URLS));
             p.put(Prefs.PING_TARGETS, Prefs.join(Prefs.DEFAULT_PING_TARGETS));
@@ -207,7 +207,7 @@ public final class Presets {
      */
     public static Preset whitelist() {
         List<String> white = new ArrayList<>();
-        for (String u : Prefs.DEFAULT_SOURCES) {
+        for (String u : Prefs.FULL_SOURCES) {
             String l = u.toLowerCase();
             if (l.contains("white")) white.add(u);
         }

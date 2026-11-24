@@ -60,8 +60,6 @@ public class MainActivity extends Activity {
      * замера не занимает один список, пока до остальных не дошла очередь.
      */
     private static final int POOL_BATCH = 200;
-    /** Замер из пула моложе этого возраста переиспользуем, не гоняя конфиг заново. */
-    private static final long POOL_REUSE_MS = 12 * 60 * 60 * 1000L;
     /**
      * Сколько конфигов за один сбор перепроверить через ciadpi. Мало: линия одна,
      * замер идёт по очереди, и каждый — до нескольких секунд.
@@ -701,8 +699,9 @@ public class MainActivity extends Activity {
         searching = true;
         ConfigRepository.clearCancel();
         setBusy(true, "Сбор пула…");
-        uiLog("Сбор пула: обновляю списки → дедупликация → кластеры провайдеров → "
-                + "партии по " + Prefs.batchSize(this) + " конфигов в ОДНОМ ядре");
+        uiLog("Сбор конфигураций: рабочие из пула первыми (и заново) → обновление источников → "
+                + "кластеры провайдеров → партии по " + Prefs.batchSize(this)
+                + " в ОДНОМ ядре. Потолок хранилища: " + Prefs.maxConfigs(this) + " конфигов");
 
         new Thread(new Runnable() {
             @Override public void run() {
@@ -726,13 +725,11 @@ public class MainActivity extends Activity {
                                 + ") — продолжаю с локальным списком");
                     }
 
-                    // 1.0) вычеркнуть из скачанных списков всё, что уже в чёрном списке:
-                    // иначе мёртвые конфиги возвращаются с каждым обновлением и снова
-                    // занимают пинг и дорожки замера.
-                    int purged = ConfigRepository.dropBlacklisted(MainActivity.this);
-                    if (purged > 0) {
-                        uiLog("Чёрный список: из скачанных списков вычеркнуто " + purged);
-                    }
+                    // 1.0) С 0.1.20 хранилище НЕ чистится по чёрному списку: корпус
+                    // забивается до потолка (50 000) со всех источников, а отсев по ЧС и
+                    // дубликатам делается уже на сборке пула — иначе после чистки
+                    // источники снова возвращали бы те же строки, а редкие рабочие
+                    // конфиги терялись бы вместе с мёртвыми.
 
                     List<ProxyConfig> all = ConfigRepository.all(MainActivity.this);
                     if (all.isEmpty()) {
@@ -825,6 +822,28 @@ public class MainActivity extends Activity {
                         }
                     }
 
+                    // 1.9) Провайдеры, признанные мёртвыми в прошлых прогонах, не пингуем:
+                    // с корпусом на 50 000 строк это единственная дешёвая возможность
+                    // вычеркнуть тысячи заведомо мёртвых строк до TCP-отсева.
+                    if (!ConfigRepository.isCancelled()) {
+                        java.util.Set<String> deadClusters =
+                                ClusterStore.dead(MainActivity.this, Net.key(MainActivity.this));
+                        if (!deadClusters.isEmpty() && !all.isEmpty()) {
+                            int before = all.size();
+                            List<ProxyConfig> keep = new ArrayList<>(all.size());
+                            for (ProxyConfig cfg : all) {
+                                if (!deadClusters.contains(Cluster.key(cfg))) keep.add(cfg);
+                            }
+                            all = keep;
+                            int cut = before - all.size();
+                            if (cut > 0) {
+                                uiLog("Мёртвые кластеры: пропускаю " + cut + " конфигов "
+                                        + "(" + deadClusters.size() + " провайдеров, вердикт "
+                                        + (ClusterStore.TTL_DEAD_MS / 3600000) + " ч)");
+                            }
+                        }
+                    }
+
                     // 2) БАТЧ-ЗАМЕР В ОДНОМ ЯДРЕ + КЛАСТЕРНАЯ ВЫБОРКА (0.1.18).
                     //
                     // Порядок обхода больше не случаен: конфиги одного провайдера — это
@@ -842,6 +861,7 @@ public class MainActivity extends Activity {
                     int measuredOk = 0;
                     int dpiBudget = DPI_RETRIES;
 
+                    final List<Pool.Entry> poolBefore = Pool.load(MainActivity.this);
                     PoolScan.Outcome scan = PoolScan.run(MainActivity.this, all,
                             new PoolScan.Log() {
                                 @Override public void line(String message) { uiLog(message); }
@@ -851,7 +871,22 @@ public class MainActivity extends Activity {
                             });
                     measuredOk += scan.ok;
                     uiLog("Разбор списка: " + scan.summary());
-                    if (scan.cancelled) uiLog("Сбор остановлен");
+                    if (scan.poolFirst > 0) {
+                        uiLog("Рабочие из пула: " + scan.poolFirst + " перемерено первыми, "
+                                + "подтвердили скорость и вернулись " + scan.poolBack);
+                    }
+                    if (scan.cancelled) {
+                        // Пул вычищался перед перезамером: если остановили до первого
+                        // подтверждения, возвращаем старый список, чтобы «Подключить»
+                        // не осталось без рабочих конфигов.
+                        if (Pool.count(MainActivity.this) == 0 && !poolBefore.isEmpty()) {
+                            Pool.save(MainActivity.this, poolBefore);
+                            uiLog("Сбор остановлен до подтверждения — старый пул возвращён ("
+                                    + poolBefore.size() + ")");
+                        } else {
+                            uiLog("Сбор остановлен");
+                        }
+                    }
 
                     // 2.1) Кому батч не дал вердикта (не «данных нет», а «не успели») —
                     // одна попытка через ciadpi. Бюджет общий на весь сбор.
